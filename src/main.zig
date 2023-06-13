@@ -197,6 +197,30 @@ pub fn main() !void {
             for (command.argv) |arg| try stdout_w.print(" {s}", .{arg});
             try stdout_w.writeAll(":\n");
 
+            try tty_conf.setColor(stdout_w, .bold);
+            try stdout_w.writeAll("  measurement");
+            try stdout_w.writeByteNTimes(' ', 19 - "  measurement".len);
+            try tty_conf.setColor(stdout_w, .bright_green);
+            try stdout_w.writeAll("mean");
+            try tty_conf.setColor(stdout_w, .reset);
+            try tty_conf.setColor(stdout_w, .bold);
+            try stdout_w.writeAll(" ± ");
+            try tty_conf.setColor(stdout_w, .green);
+            try stdout_w.writeAll("σ");
+            try tty_conf.setColor(stdout_w, .reset);
+
+            try tty_conf.setColor(stdout_w, .bold);
+            try stdout_w.writeByteNTimes(' ', 20);
+            try tty_conf.setColor(stdout_w, .cyan);
+            try stdout_w.writeAll("min");
+            try tty_conf.setColor(stdout_w, .reset);
+            try tty_conf.setColor(stdout_w, .bold);
+            try stdout_w.writeAll(" … ");
+            try tty_conf.setColor(stdout_w, .magenta);
+            try stdout_w.writeAll("max");
+            try tty_conf.setColor(stdout_w, .reset);
+            try stdout_w.writeAll("\n");
+
             inline for (@typeInfo(Command.Measurements).Struct.fields) |field| {
                 const measurement = @field(command.measurements, field.name);
                 try printMeasurement(tty_conf, stdout_w, measurement, field.name);
@@ -274,28 +298,40 @@ const Measurement = struct {
 };
 
 fn printMeasurement(tty_conf: std.io.tty.Config, w: anytype, m: Measurement, name: []const u8) !void {
-    try w.print("  {s} (", .{name});
-    try tty_conf.setColor(w, .bright_green);
-    try w.writeAll("mean");
-    try tty_conf.setColor(w, .reset);
-    try w.writeAll(" ± ");
-    try tty_conf.setColor(w, .green);
-    try w.writeAll("σ");
-    try tty_conf.setColor(w, .reset);
-    try w.writeAll("):");
+    try w.print("  {s}", .{name});
+
+    var buf: [200]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    var count: usize = 0;
 
     const spaces = 30 - ("  (mean  ):".len + name.len + 2);
     try w.writeByteNTimes(' ', spaces);
     try tty_conf.setColor(w, .bright_green);
-    try printUnit(w, m.mean, m.unit, m.std_dev);
+    try printUnit(fbs.writer(), m.mean, m.unit, m.std_dev);
+    try w.writeAll(fbs.getWritten());
+    count += fbs.pos;
+    fbs.pos = 0;
     try tty_conf.setColor(w, .reset);
     try w.writeAll(" ± ");
     try tty_conf.setColor(w, .green);
-    try printUnit(w, m.std_dev, m.unit, 0);
+    try printUnit(fbs.writer(), m.std_dev, m.unit, 0);
+    try w.writeAll(fbs.getWritten());
+    count += fbs.pos;
+    fbs.pos = 0;
+    try tty_conf.setColor(w, .reset);
+
+    try w.writeByteNTimes(' ', 47 - ("  measurement      ".len + count + 3));
+    try tty_conf.setColor(w, .reset);
+
+    try tty_conf.setColor(w, .cyan);
+    try printUnit(w, @intToFloat(f64, m.min), m.unit, m.std_dev);
+    try tty_conf.setColor(w, .reset);
+    try w.writeAll(" … ");
+    try tty_conf.setColor(w, .magenta);
+    try printUnit(w, @intToFloat(f64, m.max), m.unit, m.std_dev);
     try tty_conf.setColor(w, .reset);
 
     try w.writeAll("\n");
-    // {d:0.2} +/- {d:0.2}\n", .{ name, m.mean, m.std_dev });
 }
 
 fn printUnit(w: anytype, x: f64, unit: Measurement.Unit, std_dev: f64) !void {
