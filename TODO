@@ -1,9 +1,9 @@
 next steps:
  * run N commands
- * add hardware counters
  * compare the commands with each other
  * colors and shit
  * run the commands multiple times and collect min/max/avg etc
+ * mad max mode
 
 feature wishlist
  * when a command fails, show the stderr by default
