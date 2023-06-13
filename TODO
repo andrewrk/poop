@@ -4,11 +4,10 @@ next steps:
  * colors and shit
  * add page faults
  * investigate outliers. keep removing them?
+ * detect statistical outliers
+ * warmup phase
  * pre-report the current estimate
  * mad max mode
 
 feature wishlist
  * when a command fails, show the stderr by default
- * show peak rss in addition to wall clock time
- * show other hardware counters
- * by default, only do 2-3 runs if a run takes longer than 5 seconds

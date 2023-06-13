@@ -70,9 +70,9 @@ pub fn main() !void {
     const max_nano_seconds = std.time.ns_per_s * 3;
 
     var timer = std.time.Timer.start() catch @panic("need timer to work");
-    const first_start = timer.read();
 
     for (commands.items) |*command| {
+        const first_start = timer.read();
         var sample_index: usize = 0;
         while ((sample_index < 3 or
             (timer.read() - first_start) < max_nano_seconds) and
