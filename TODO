@@ -1,11 +1,13 @@
 next steps:
- * use useful units of measurement
  * compare the commands with each other
  * colors and shit
+
+ * use useful units of measurement
  * add page faults
  * investigate outliers. keep removing them?
  * detect statistical outliers
  * warmup phase
+ * break std.fmt
  * pre-report the current estimate
  * mad max mode
 

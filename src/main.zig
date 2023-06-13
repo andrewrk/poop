@@ -4,6 +4,15 @@ const fd_t = std.os.fd_t;
 const pid_t = std.os.pid_t;
 const assert = std.debug.assert;
 
+const usage_text =
+    \\Usage: poop [options] <command1> ... <commandN>
+    \\
+    \\Compares the performance of the provided commands.
+    \\
+    \\Options:
+    \\ --duration <ms>    (default: 3000) how long to repeatedly sample each command
+;
+
 const PerfMeasurement = struct {
     name: []const u8,
     config: PERF.COUNT.HW,
@@ -49,9 +58,19 @@ pub fn main() !void {
 
     const args = try std.process.argsAlloc(arena);
 
-    var commands = std.ArrayList(Command).init(arena);
+    const tty_conf = std.io.tty.detectConfig(std.io.getStdErr());
+    const stderr = std.io.getStdErr();
+    const stderr_w = stderr.writer();
+    const stdout = std.io.getStdOut();
+    var stdout_bw = std.io.bufferedWriter(stdout.writer());
+    const stdout_w = stdout_bw.writer();
 
-    for (args[1..]) |arg| {
+    var commands = std.ArrayList(Command).init(arena);
+    var max_nano_seconds: u64 = std.time.ns_per_s * 3;
+
+    var arg_i: usize = 1;
+    while (arg_i < args.len) : (arg_i += 1) {
+        const arg = args[arg_i];
         if (!std.mem.startsWith(u8, arg, "-")) {
             var cmd_argv = std.ArrayList([]const u8).init(arena);
             try parseCmd(&cmd_argv, arg);
@@ -60,18 +79,27 @@ pub fn main() !void {
                 .measurements = undefined,
             });
         } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
-            try std.io.getStdOut().writeAll(usage_text);
+            try stdout.writeAll(usage_text);
             return std.process.cleanExit();
+        } else if (std.mem.eql(u8, arg, "--duration")) {
+            arg_i += 1;
+            const next = args[arg_i];
+            const max_ms = std.fmt.parseInt(u64, next, 10) catch |err| {
+                std.debug.print("unable to parse --duration argument '{s}': {s}\n", .{
+                    next, @errorName(err),
+                });
+                return std.process.exit(1);
+            };
+            max_nano_seconds = std.time.ns_per_ms * max_ms;
         }
     }
 
     var perf_fds = [1]fd_t{-1} ** perf_measurements.len;
     var samples_buf: [10000]Sample = undefined;
-    const max_nano_seconds = std.time.ns_per_s * 3;
 
     var timer = std.time.Timer.start() catch @panic("need timer to work");
 
-    for (commands.items) |*command| {
+    for (commands.items, 1..) |*command, command_n| {
         const first_start = timer.read();
         var sample_index: usize = 0;
         while ((sample_index < 3 or
@@ -152,26 +180,34 @@ pub fn main() !void {
         const samples = all_samples[1 .. all_samples.len - 1];
 
         command.measurements = .{
-            .wall_time = Measurement.compute(samples, "wall_time"),
-            .peak_rss = Measurement.compute(samples, "peak_rss"),
-            .cpu_cycles = Measurement.compute(samples, "cpu_cycles"),
-            .instructions = Measurement.compute(samples, "instructions"),
-            .cache_references = Measurement.compute(samples, "cache_references"),
-            .cache_misses = Measurement.compute(samples, "cache_misses"),
-            .branch_misses = Measurement.compute(samples, "branch_misses"),
+            .wall_time = Measurement.compute(samples, "wall_time", .nanoseconds),
+            .peak_rss = Measurement.compute(samples, "peak_rss", .bytes),
+            .cpu_cycles = Measurement.compute(samples, "cpu_cycles", .count),
+            .instructions = Measurement.compute(samples, "instructions", .count),
+            .cache_references = Measurement.compute(samples, "cache_references", .count),
+            .cache_misses = Measurement.compute(samples, "cache_misses", .count),
+            .branch_misses = Measurement.compute(samples, "branch_misses", .count),
         };
 
         {
-            std.debug.print("command:", .{});
-            for (command.argv) |arg| std.debug.print(" {s}", .{arg});
-            std.debug.print(":\n", .{});
+            try tty_conf.setColor(stdout_w, .bold);
+            try stdout_w.print("Benchmark {d}", .{command_n});
+            try tty_conf.setColor(stdout_w, .reset);
+            try stdout_w.writeAll(":");
+            for (command.argv) |arg| try stdout_w.print(" {s}", .{arg});
+            try stdout_w.writeAll(":\n");
 
             inline for (@typeInfo(Command.Measurements).Struct.fields) |field| {
                 const measurement = @field(command.measurements, field.name);
-                printMeasurement(measurement, field.name);
+                try printMeasurement(tty_conf, stdout_w, measurement, field.name);
             }
+
+            try stdout_bw.flush(); // 💩
         }
     }
+
+    _ = stderr_w;
+    try stdout_bw.flush(); // 💩
 }
 
 fn parseCmd(list: *std.ArrayList([]const u8), cmd: []const u8) !void {
@@ -188,19 +224,21 @@ fn readPerfFd(fd: fd_t) usize {
     return result;
 }
 
-const usage_text =
-    \\Usage: poop <command> <command>
-    \\
-    \\Compares the performance of the provided commands.
-;
-
 const Measurement = struct {
     median: u64,
-    mean: u64,
     min: u64,
     max: u64,
+    mean: f64,
+    std_dev: f64,
+    unit: Unit,
 
-    fn compute(samples: []const Sample, comptime field: []const u8) Measurement {
+    const Unit = enum {
+        nanoseconds,
+        bytes,
+        count,
+    };
+
+    fn compute(samples: []const Sample, comptime field: []const u8, unit: Unit) Measurement {
         // Compute stats
         var total: u64 = 0;
         var min: u64 = std.math.maxInt(u64);
@@ -211,15 +249,75 @@ const Measurement = struct {
             if (v < min) min = v;
             if (v > max) max = v;
         }
+        const mean = @intToFloat(f64, total) / @intToFloat(f64, samples.len);
+
+        var std_dev: f64 = 0;
+        for (samples) |s| {
+            const v = @field(s, field);
+            const delta = @intToFloat(f64, v) - mean;
+            std_dev += delta * delta;
+        }
+        if (samples.len > 1) {
+            std_dev /= @intToFloat(f64, samples.len - 1);
+            std_dev = @sqrt(std_dev);
+        }
+
         return .{
             .median = @field(samples[samples.len / 2], field),
-            .mean = total / samples.len,
+            .mean = mean,
             .min = min,
             .max = max,
+            .std_dev = std_dev,
+            .unit = unit,
         };
     }
 };
 
-fn printMeasurement(m: Measurement, name: []const u8) void {
-    std.debug.print("  {s}: {d} +/- {d}\n", .{ name, m.mean, (m.max - m.min) / 2 });
+fn printMeasurement(tty_conf: std.io.tty.Config, w: anytype, m: Measurement, name: []const u8) !void {
+    try w.print("  {s} (", .{name});
+    try tty_conf.setColor(w, .bright_green);
+    try w.writeAll("mean");
+    try tty_conf.setColor(w, .reset);
+    try w.writeAll(" ± ");
+    try tty_conf.setColor(w, .green);
+    try w.writeAll("σ");
+    try tty_conf.setColor(w, .reset);
+    try w.writeAll("):");
+
+    const spaces = 30 - ("  (mean  ):".len + name.len + 2);
+    try w.writeByteNTimes(' ', spaces);
+    try tty_conf.setColor(w, .bright_green);
+    try printUnit(w, m.mean, m.unit, m.std_dev);
+    try tty_conf.setColor(w, .reset);
+    try w.writeAll(" ± ");
+    try tty_conf.setColor(w, .green);
+    try printUnit(w, m.std_dev, m.unit, 0);
+    try tty_conf.setColor(w, .reset);
+
+    try w.writeAll("\n");
+    // {d:0.2} +/- {d:0.2}\n", .{ name, m.mean, m.std_dev });
+}
+
+fn printUnit(w: anytype, x: f64, unit: Measurement.Unit, std_dev: f64) !void {
+    _ = std_dev; // TODO something useful with this
+    const int = @floatToInt(u64, @round(x));
+    switch (unit) {
+        .count => {
+            try w.print("{d}", .{int});
+        },
+        .nanoseconds => {
+            try w.print("{}", .{std.fmt.fmtDuration(int)});
+        },
+        .bytes => {
+            if (int >= 1000_000_000) {
+                try w.print("{d}G", .{int / 1000_000_000});
+            } else if (int >= 1000_000) {
+                try w.print("{d}M", .{int / 1000_000});
+            } else if (int >= 1000) {
+                try w.print("{d}K", .{int / 1000});
+            } else {
+                try w.print("{d}B", .{int});
+            }
+        },
+    }
 }
