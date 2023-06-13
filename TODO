@@ -1,8 +1,10 @@
 next steps:
- * run N commands
+ * use useful units of measurement
  * compare the commands with each other
  * colors and shit
- * run the commands multiple times and collect min/max/avg etc
+ * add page faults
+ * investigate outliers. keep removing them?
+ * pre-report the current estimate
  * mad max mode
 
 feature wishlist
