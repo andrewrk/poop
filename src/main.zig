@@ -29,6 +29,7 @@ const perf_measurements = [_]PerfMeasurement{
 const Command = struct {
     argv: []const []const u8,
     measurements: Measurements,
+    sample_count: usize,
 
     const Measurements = struct {
         wall_time: Measurement,
@@ -77,6 +78,7 @@ pub fn main() !void {
             try commands.append(.{
                 .argv = try cmd_argv.toOwnedSlice(),
                 .measurements = undefined,
+                .sample_count = undefined,
             });
         } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
             try stdout.writeAll(usage_text);
@@ -188,10 +190,13 @@ pub fn main() !void {
             .cache_misses = Measurement.compute(samples, "cache_misses", .count),
             .branch_misses = Measurement.compute(samples, "branch_misses", .count),
         };
+        command.sample_count = all_samples.len;
 
         {
             try tty_conf.setColor(stdout_w, .bold);
             try stdout_w.print("Benchmark {d}", .{command_n});
+            try tty_conf.setColor(stdout_w, .dim);
+            try stdout_w.print(" ({d} runs)", .{samples.len});
             try tty_conf.setColor(stdout_w, .reset);
             try stdout_w.writeAll(":");
             for (command.argv) |arg| try stdout_w.print(" {s}", .{arg});
