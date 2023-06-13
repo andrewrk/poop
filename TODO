@@ -1,0 +1,12 @@
+next steps:
+ * run N commands
+ * add hardware counters
+ * compare the commands with each other
+ * colors and shit
+ * run the commands multiple times and collect min/max/avg etc
+
+feature wishlist
+ * when a command fails, show the stderr by default
+ * show peak rss in addition to wall clock time
+ * show other hardware counters
+ * by default, only do 2-3 runs if a run takes longer than 5 seconds
