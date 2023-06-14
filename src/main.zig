@@ -187,6 +187,24 @@ pub fn main() !void {
         };
         command.sample_count = all_samples.len;
 
+        const max_lens = blk: {
+            var tmp = struct {
+                mean: u64 = 0,
+                std_dev: u64 = 0,
+                min: u64 = 0,
+                max: u64 = 0,
+            }{};
+
+            inline for (std.meta.fields(@TypeOf(tmp))) |tfield| {
+                inline for (@typeInfo(Command.Measurements).Struct.fields) |mfield| {
+                    const measurement = @field(command.measurements, mfield.name);
+                    const fmt_len = std.fmt.count("{" ++ tfield.name ++ "}", .{measurement});
+                    @field(tmp, tfield.name) = @max(fmt_len, @field(tmp, tfield.name));
+                }
+            }
+            break :blk tmp;
+        };
+
         {
             try tty_conf.setColor(stdout_w, .bold);
             try stdout_w.print("Benchmark {d}", .{command_n});
@@ -199,7 +217,8 @@ pub fn main() !void {
 
             try tty_conf.setColor(stdout_w, .bold);
             try stdout_w.writeAll("  measurement");
-            try stdout_w.writeByteNTimes(' ', 19 - "  measurement".len);
+            try stdout_w.writeByteNTimes(' ', 6);
+            try stdout_w.writeByteNTimes(' ', max_lens.mean - 4);
             try tty_conf.setColor(stdout_w, .bright_green);
             try stdout_w.writeAll("mean");
             try tty_conf.setColor(stdout_w, .reset);
@@ -210,7 +229,8 @@ pub fn main() !void {
             try tty_conf.setColor(stdout_w, .reset);
 
             try tty_conf.setColor(stdout_w, .bold);
-            try stdout_w.writeByteNTimes(' ', 15);
+            try stdout_w.writeByteNTimes(' ', 13);
+            try stdout_w.writeByteNTimes(' ', max_lens.min - 3);
             try tty_conf.setColor(stdout_w, .cyan);
             try stdout_w.writeAll("min");
             try tty_conf.setColor(stdout_w, .reset);
@@ -222,7 +242,7 @@ pub fn main() !void {
 
             if (commands.items.len >= 2) {
                 try tty_conf.setColor(stdout_w, .bold);
-                try stdout_w.writeByteNTimes(' ', 18);
+                try stdout_w.writeByteNTimes(' ', max_lens.min + 2);
                 try stdout_w.writeAll("delta");
                 try tty_conf.setColor(stdout_w, .reset);
             }
@@ -231,11 +251,8 @@ pub fn main() !void {
 
             inline for (@typeInfo(Command.Measurements).Struct.fields) |field| {
                 const measurement = @field(command.measurements, field.name);
-                const first_measurement = if (command_n == 1)
-                    null
-                else
-                    @field(commands.items[0].measurements, field.name);
-                try printMeasurement(tty_conf, stdout_w, measurement, field.name, first_measurement, commands.items.len);
+                const first_measurement = if (command_n == 1) null else @field(commands.items[0].measurements, field.name);
+                try printMeasurement(tty_conf, stdout_w, measurement, field.name, first_measurement, commands.items.len, max_lens);
             }
 
             try stdout_bw.flush(); // 💩
@@ -307,6 +324,16 @@ const Measurement = struct {
             .unit = unit,
         };
     }
+
+    pub fn format(m: Measurement, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = options;
+        const val = @field(m, fmt);
+        switch (@TypeOf(val)) {
+            f64 => try printUnit(writer, val, m.unit, m.std_dev),
+            u64 => try printUnit(writer, @intToFloat(f64, val), m.unit, m.std_dev),
+            else => unreachable,
+        }
+    }
 };
 
 fn printMeasurement(
@@ -316,47 +343,31 @@ fn printMeasurement(
     name: []const u8,
     first_m: ?Measurement,
     command_count: usize,
+    max_lens: anytype,
 ) !void {
     try w.print("  {s}", .{name});
-
-    var buf: [200]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    var count: usize = 0;
 
     const spaces = 30 - ("  (mean  ):".len + name.len + 2);
     try w.writeByteNTimes(' ', spaces);
     try tty_conf.setColor(w, .bright_green);
-    try printUnit(fbs.writer(), m.mean, m.unit, m.std_dev);
-    try w.writeAll(fbs.getWritten());
-    count += fbs.pos;
-    fbs.pos = 0;
+    try w.writeByteNTimes(' ', max_lens.mean - std.fmt.count("{mean}", .{m}));
+    try w.print("{mean}", .{m});
     try tty_conf.setColor(w, .reset);
     try w.writeAll(" ± ");
     try tty_conf.setColor(w, .green);
-    try printUnit(fbs.writer(), m.std_dev, m.unit, 0);
-    try w.writeAll(fbs.getWritten());
-    count += fbs.pos;
-    fbs.pos = 0;
+    try w.print("{std_dev}", .{m});
     try tty_conf.setColor(w, .reset);
-
-    try w.writeByteNTimes(' ', 42 - ("  measurement      ".len + count + 3));
-    count = 0;
+    try w.writeByteNTimes(' ', max_lens.std_dev - std.fmt.count("{std_dev}", .{m}) + 5);
 
     try tty_conf.setColor(w, .cyan);
-    try printUnit(fbs.writer(), @intToFloat(f64, m.min), m.unit, m.std_dev);
-    try w.writeAll(fbs.getWritten());
-    count += fbs.pos;
-    fbs.pos = 0;
+    try w.writeByteNTimes(' ', max_lens.min - std.fmt.count("{min}", .{m}));
+    try w.print("{min}", .{m});
     try tty_conf.setColor(w, .reset);
     try w.writeAll(" … ");
     try tty_conf.setColor(w, .magenta);
-    try printUnit(fbs.writer(), @intToFloat(f64, m.max), m.unit, m.std_dev);
-    try w.writeAll(fbs.getWritten());
-    count += fbs.pos;
-    fbs.pos = 0;
+    try w.print("{max}", .{m});
     try tty_conf.setColor(w, .reset);
-
-    try w.writeByteNTimes(' ', 25 - (count + 1));
+    try w.writeByteNTimes(' ', max_lens.max - std.fmt.count("{max}", .{m}) + 5);
 
     // ratio
     if (command_count > 1) {
@@ -371,10 +382,7 @@ fn printMeasurement(
                     try tty_conf.setColor(w, .dim);
                     try w.writeAll("  ");
                 }
-                try fbs.writer().print("+{d:0.1}%", .{percent * 100});
-                try w.writeAll(fbs.getWritten());
-                count += fbs.pos;
-                fbs.pos = 0;
+                try w.print("+{d:0.1}%", .{percent * 100});
             } else {
                 if (is_sig) {
                     try w.writeAll("⚡");
@@ -383,10 +391,7 @@ fn printMeasurement(
                     try tty_conf.setColor(w, .dim);
                     try w.writeAll("  ");
                 }
-                try fbs.writer().print("{d:0.1}%", .{percent * 100});
-                try w.writeAll(fbs.getWritten());
-                count += fbs.pos;
-                fbs.pos = 0;
+                try w.print("{d:0.1}%", .{percent * 100});
             }
         } else {
             try tty_conf.setColor(w, .dim);
