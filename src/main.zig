@@ -231,7 +231,7 @@ pub fn main() !void {
             if (commands.items.len >= 2) {
                 try tty_conf.setColor(stdout_w, .bold);
                 try stdout_w.writeByteNTimes(' ', 18);
-                try stdout_w.writeAll("ratio");
+                try stdout_w.writeAll("delta");
                 try tty_conf.setColor(stdout_w, .reset);
             }
 
@@ -369,26 +369,36 @@ fn printMeasurement(
     // ratio
     if (command_count > 1) {
         if (first_m) |f| {
+            const percent = (m.mean - f.mean) / f.mean;
+            const is_sig = @fabs(percent) >= 0.01;
             if (m.mean > f.mean) {
-                try w.writeAll("💩");
-                const factor = m.mean / f.mean;
-                try tty_conf.setColor(w, .bright_red);
-                try fbs.writer().print("{d:0.1}", .{factor});
+                if (is_sig) {
+                    try w.writeAll("💩");
+                    try tty_conf.setColor(w, .bright_red);
+                } else {
+                    try tty_conf.setColor(w, .dim);
+                    try w.writeAll("  ");
+                }
+                try fbs.writer().print("+{d:0.1}%", .{percent * 100});
                 try w.writeAll(fbs.getWritten());
                 count += fbs.pos;
                 fbs.pos = 0;
             } else {
-                try w.writeAll("⚡");
-                const factor = f.mean / m.mean;
-                try tty_conf.setColor(w, .bright_green);
-                try fbs.writer().print("{d:0.1}", .{factor});
+                if (is_sig) {
+                    try w.writeAll("⚡");
+                    try tty_conf.setColor(w, .bright_green);
+                } else {
+                    try tty_conf.setColor(w, .dim);
+                    try w.writeAll("  ");
+                }
+                try fbs.writer().print("{d:0.1}%", .{percent * 100});
                 try w.writeAll(fbs.getWritten());
                 count += fbs.pos;
                 fbs.pos = 0;
             }
         } else {
             try tty_conf.setColor(w, .dim);
-            try w.writeAll("1.0");
+            try w.writeAll("0%");
         }
     }
 
