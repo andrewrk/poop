@@ -303,6 +303,16 @@ const Measurement = struct {
             .unit = unit,
         };
     }
+
+    pub fn format(m: Measurement, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = options;
+        const val = @field(m, fmt);
+        switch (@TypeOf(val)) {
+            f64 => try printUnit(writer, val, m.unit, m.std_dev),
+            u64 => try printUnit(writer, @intToFloat(f64, val), m.unit, m.std_dev),
+            else => unreachable,
+        }
+    }
 };
 
 fn printMeasurement(
@@ -322,14 +332,14 @@ fn printMeasurement(
     const spaces = 30 - ("  (mean  ):".len + name.len + 2);
     try w.writeByteNTimes(' ', spaces);
     try tty_conf.setColor(w, .bright_green);
-    try printUnit(fbs.writer(), m.mean, m.unit, m.std_dev);
+    try fbs.writer().print("{mean}", .{m});
     try w.writeAll(fbs.getWritten());
     count += fbs.pos;
     fbs.pos = 0;
     try tty_conf.setColor(w, .reset);
     try w.writeAll(" ± ");
     try tty_conf.setColor(w, .green);
-    try printUnit(fbs.writer(), m.std_dev, m.unit, 0);
+    try fbs.writer().print("{std_dev}", .{m});
     try w.writeAll(fbs.getWritten());
     count += fbs.pos;
     fbs.pos = 0;
@@ -339,14 +349,14 @@ fn printMeasurement(
     count = 0;
 
     try tty_conf.setColor(w, .cyan);
-    try printUnit(fbs.writer(), @intToFloat(f64, m.min), m.unit, m.std_dev);
+    try fbs.writer().print("{min}", .{m});
     try w.writeAll(fbs.getWritten());
     count += fbs.pos;
     fbs.pos = 0;
     try tty_conf.setColor(w, .reset);
     try w.writeAll(" … ");
     try tty_conf.setColor(w, .magenta);
-    try printUnit(fbs.writer(), @intToFloat(f64, m.max), m.unit, m.std_dev);
+    try fbs.writer().print("{max}", .{m});
     try w.writeAll(fbs.getWritten());
     count += fbs.pos;
     fbs.pos = 0;
