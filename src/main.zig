@@ -17,6 +17,10 @@ const usage_text =
     \\        --duration <ms>
     \\            (default: 5000) how long to repeatedly sample each command
     \\
+    \\    -w, --warmup <num>
+    \\            (default: 0) Perform NUM warmup runs before the actual benchmark. This can be used to
+    \\            fill caches for I/O-heavy programs.
+    \\
 ;
 
 const PerfMeasurement = struct {
@@ -36,6 +40,7 @@ const Command = struct {
     argv: []const []const u8,
     measurements: Measurements,
     sample_count: usize,
+    run_count: usize,
 
     const Measurements = struct {
         wall_time: Measurement,
@@ -74,6 +79,7 @@ pub fn main() !void {
 
     var commands = std.ArrayList(Command).init(arena);
     var max_nano_seconds: u64 = std.time.ns_per_s * 5;
+    var warmup_count: u64 = 0;
 
     var arg_i: usize = 1;
     while (arg_i < args.len) : (arg_i += 1) {
@@ -99,6 +105,13 @@ pub fn main() !void {
                 std.process.exit(1);
             };
             max_nano_seconds = std.time.ns_per_ms * max_ms;
+        } else if (std.mem.eql(u8, arg, "-w") or std.mem.eql(u8, arg, "--warmup")) {
+            arg_i += 1;
+            const next = args[arg_i];
+            warmup_count = std.fmt.parseInt(u64, next, 10) catch |err| {
+                std.debug.print("unable to parse --warmup argument '{s}': {s}\n", .{ next, @errorName(err) });
+                std.process.exit(1);
+            };
         } else {
             std.debug.print("unrecognized argument: '{s}'\n", .{arg});
             std.process.exit(1);
@@ -111,6 +124,31 @@ pub fn main() !void {
     var timer = std.time.Timer.start() catch @panic("need timer to work");
 
     for (commands.items, 1..) |*command, command_n| {
+        for (0..warmup_count) |_| {
+            var child = std.process.Child.init(command.argv, arena);
+
+            child.stdin_behavior = .Ignore;
+            child.stdout_behavior = .Ignore;
+            child.stderr_behavior = .Ignore;
+            child.request_resource_usage_statistics = true;
+
+            try child.spawn();
+            const term = try child.wait();
+
+            switch (term) {
+                .Exited => |code| {
+                    if (code != 0) {
+                        std.debug.print("error: exit code {d}\n", .{code});
+                        std.process.exit(1);
+                    }
+                },
+                else => {
+                    std.debug.print("error: terminated unexpectedly\n", .{});
+                    std.process.exit(1);
+                },
+            }
+        }
+
         const first_start = timer.read();
         var sample_index: usize = 0;
         while ((sample_index < 3 or
