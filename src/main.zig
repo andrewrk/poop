@@ -51,6 +51,18 @@ const Sample = struct {
     cache_misses: u64,
     branch_misses: u64,
     peak_rss: u64,
+
+    pub fn lessThanContext(comptime field: []const u8) type {
+        return struct {
+            fn lessThan(
+                _: void,
+                lhs: Sample,
+                rhs: Sample,
+            ) bool {
+                return @field(lhs, field) < @field(rhs, field);
+            }
+        };
+    }
 };
 
 pub fn main() !void {
@@ -220,9 +232,15 @@ pub fn main() !void {
             try stdout_w.writeAll("max");
             try tty_conf.setColor(stdout_w, .reset);
 
+            try tty_conf.setColor(stdout_w, .bold);
+            try stdout_w.writeByteNTimes(' ', 28 - " outliers".len);
+            try tty_conf.setColor(stdout_w, .bright_yellow);
+            try stdout_w.writeAll("outliers");
+            try tty_conf.setColor(stdout_w, .reset);
+
             if (commands.items.len >= 2) {
                 try tty_conf.setColor(stdout_w, .bold);
-                try stdout_w.writeByteNTimes(' ', 18);
+                try stdout_w.writeByteNTimes(' ', 9);
                 try stdout_w.writeAll("delta");
                 try tty_conf.setColor(stdout_w, .reset);
             }
@@ -261,11 +279,15 @@ fn readPerfFd(fd: fd_t) usize {
 }
 
 const Measurement = struct {
+    q1: u64,
     median: u64,
+    q3: u64,
     min: u64,
     max: u64,
     mean: f64,
     std_dev: f64,
+    outlier_count: u64,
+    outlier_frac: f64,
     unit: Unit,
 
     const Unit = enum {
@@ -274,7 +296,8 @@ const Measurement = struct {
         count,
     };
 
-    fn compute(samples: []const Sample, comptime field: []const u8, unit: Unit) Measurement {
+    fn compute(samples: []Sample, comptime field: []const u8, unit: Unit) Measurement {
+        std.mem.sort(Sample, samples, {}, Sample.lessThanContext(field).lessThan);
         // Compute stats
         var total: u64 = 0;
         var min: u64 = std.math.maxInt(u64);
@@ -286,7 +309,6 @@ const Measurement = struct {
             if (v > max) max = v;
         }
         const mean = @intToFloat(f64, total) / @intToFloat(f64, samples.len);
-
         var std_dev: f64 = 0;
         for (samples) |s| {
             const v = @field(s, field);
@@ -298,12 +320,27 @@ const Measurement = struct {
             std_dev = @sqrt(std_dev);
         }
 
+        const q1 = @field(samples[samples.len / 4], field);
+        const q3 = if (samples.len < 4) @field(samples[samples.len - 1], field) else @field(samples[samples.len - samples.len / 4], field);
+        // Tukey's Fences outliers
+        var outlier_count: u64 = 0;
+        const iqr = @intToFloat(f64, q3 - q1);
+        const low_fence = @intToFloat(f64, q1) - 1.5 * iqr;
+        const high_fence = @intToFloat(f64, q3) + 1.5 * iqr;
+        for (samples) |s| {
+            const v = @intToFloat(f64, @field(s, field));
+            if (v < low_fence or v > high_fence) outlier_count += 1;
+        }
         return .{
+            .q1 = q1,
             .median = @field(samples[samples.len / 2], field),
+            .q3 = q3,
             .mean = mean,
             .min = min,
             .max = max,
             .std_dev = std_dev,
+            .outlier_count = outlier_count,
+            .outlier_frac = @intToFloat(f64, outlier_count) / @intToFloat(f64, samples.len),
             .unit = unit,
         };
     }
@@ -357,6 +394,19 @@ fn printMeasurement(
     try tty_conf.setColor(w, .reset);
 
     try w.writeByteNTimes(' ', 25 - (count + 1));
+    count = 0;
+
+    if (m.outlier_frac >= 0.1)
+        try tty_conf.setColor(w, .yellow)
+    else
+        try tty_conf.setColor(w, .dim);
+    try fbs.writer().print("{d: >4.0} ({d: >2.0}%)", .{ m.outlier_count, m.outlier_frac * 100 });
+    try w.writeAll(fbs.getWritten());
+    count += fbs.pos;
+    fbs.pos = 0;
+    try tty_conf.setColor(w, .reset);
+
+    try w.writeByteNTimes(' ', 19 - (count + 1));
 
     // ratio
     if (command_count > 1) {
@@ -371,19 +421,20 @@ fn printMeasurement(
                     try tty_conf.setColor(w, .dim);
                     try w.writeAll("  ");
                 }
-                try fbs.writer().print("+{d:0.1}%", .{percent * 100});
+                try fbs.writer().print("+{d: >4.1}%", .{percent * 100});
                 try w.writeAll(fbs.getWritten());
                 count += fbs.pos;
                 fbs.pos = 0;
             } else {
                 if (is_sig) {
+                    try tty_conf.setColor(w, .bright_yellow);
                     try w.writeAll("⚡");
                     try tty_conf.setColor(w, .bright_green);
                 } else {
                     try tty_conf.setColor(w, .dim);
                     try w.writeAll("  ");
                 }
-                try fbs.writer().print("{d:0.1}%", .{percent * 100});
+                try fbs.writer().print("-{d: >4.1}%", .{@fabs(percent) * 100});
                 try w.writeAll(fbs.getWritten());
                 count += fbs.pos;
                 fbs.pos = 0;
