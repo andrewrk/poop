@@ -494,8 +494,9 @@ fn printUnit(w: anytype, x: f64, unit: Measurement.Unit, std_dev: f64) !void {
 
 // Gets either the T or Z score for 95% confidence.
 // If no `df` variable is provided, Z score is provided.
-pub fn getStatScore95(df: ?usize) f64 {
-    if (df) |dfv| {
+pub fn getStatScore95(df: ?u64) f64 {
+    if (df) |dff| {
+        const dfv = @intCast(usize, dff);
         if (dfv <= 30) {
             return t_table95_1to30[dfv - 1];
         } else if (dfv <= 120) {
