@@ -175,24 +175,15 @@ pub fn main() !void {
         }
 
         const all_samples = samples_buf[0..sample_index];
-        const S = struct {
-            fn order(context: void, a: Sample, b: Sample) bool {
-                _ = context;
-                return a.wall_time < b.wall_time;
-            }
-        };
-        // Remove the 2 outliers, always according to wall_time.
-        std.mem.sortUnstable(Sample, all_samples, {}, S.order);
-        const samples = all_samples[1 .. all_samples.len - 1];
 
         command.measurements = .{
-            .wall_time = Measurement.compute(samples, "wall_time", .nanoseconds),
-            .peak_rss = Measurement.compute(samples, "peak_rss", .bytes),
-            .cpu_cycles = Measurement.compute(samples, "cpu_cycles", .count),
-            .instructions = Measurement.compute(samples, "instructions", .count),
-            .cache_references = Measurement.compute(samples, "cache_references", .count),
-            .cache_misses = Measurement.compute(samples, "cache_misses", .count),
-            .branch_misses = Measurement.compute(samples, "branch_misses", .count),
+            .wall_time = Measurement.compute(all_samples, "wall_time", .nanoseconds),
+            .peak_rss = Measurement.compute(all_samples, "peak_rss", .bytes),
+            .cpu_cycles = Measurement.compute(all_samples, "cpu_cycles", .count),
+            .instructions = Measurement.compute(all_samples, "instructions", .count),
+            .cache_references = Measurement.compute(all_samples, "cache_references", .count),
+            .cache_misses = Measurement.compute(all_samples, "cache_misses", .count),
+            .branch_misses = Measurement.compute(all_samples, "branch_misses", .count),
         };
         command.sample_count = all_samples.len;
 
