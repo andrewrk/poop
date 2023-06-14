@@ -10,7 +10,12 @@ const usage_text =
     \\Compares the performance of the provided commands.
     \\
     \\Options:
-    \\ --duration <ms>    (default: 5000) how long to repeatedly sample each command
+    \\
+    \\    -h, --help
+    \\            Display this help information.
+    \\
+    \\        --duration <ms>
+    \\            (default: 5000) how long to repeatedly sample each command
     \\
 ;
 
