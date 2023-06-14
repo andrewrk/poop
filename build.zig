@@ -11,5 +11,10 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    exe.strip = b.option(bool, "strip", "strip the binary") orelse switch (optimize) {
+        .Debug, .ReleaseSafe => false,
+        .ReleaseFast, .ReleaseSmall => true,
+    };
+
     b.installArtifact(exe);
 }
