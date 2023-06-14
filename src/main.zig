@@ -130,7 +130,6 @@ pub fn main() !void {
             child.stdin_behavior = .Ignore;
             child.stdout_behavior = .Ignore;
             child.stderr_behavior = .Ignore;
-            child.request_resource_usage_statistics = true;
 
             try child.spawn();
             const term = try child.wait();
