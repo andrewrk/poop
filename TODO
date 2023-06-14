@@ -1,6 +1,5 @@
 next steps:
- * compare the commands with each other
- * use useful units of measurement
+ * don't change the good/bad color if difference is within measurement error
  * add page faults
  * investigate outliers. keep removing them?
  * detect statistical outliers

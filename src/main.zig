@@ -196,7 +196,7 @@ pub fn main() !void {
             try tty_conf.setColor(stdout_w, .bold);
             try stdout_w.print("Benchmark {d}", .{command_n});
             try tty_conf.setColor(stdout_w, .dim);
-            try stdout_w.print(" ({d} runs)", .{samples.len});
+            try stdout_w.print(" ({d} runs)", .{command.sample_count});
             try tty_conf.setColor(stdout_w, .reset);
             try stdout_w.writeAll(":");
             for (command.argv) |arg| try stdout_w.print(" {s}", .{arg});
@@ -215,7 +215,7 @@ pub fn main() !void {
             try tty_conf.setColor(stdout_w, .reset);
 
             try tty_conf.setColor(stdout_w, .bold);
-            try stdout_w.writeByteNTimes(' ', 20);
+            try stdout_w.writeByteNTimes(' ', 15);
             try tty_conf.setColor(stdout_w, .cyan);
             try stdout_w.writeAll("min");
             try tty_conf.setColor(stdout_w, .reset);
@@ -224,11 +224,23 @@ pub fn main() !void {
             try tty_conf.setColor(stdout_w, .magenta);
             try stdout_w.writeAll("max");
             try tty_conf.setColor(stdout_w, .reset);
+
+            if (commands.items.len >= 2) {
+                try tty_conf.setColor(stdout_w, .bold);
+                try stdout_w.writeByteNTimes(' ', 18);
+                try stdout_w.writeAll("ratio");
+                try tty_conf.setColor(stdout_w, .reset);
+            }
+
             try stdout_w.writeAll("\n");
 
             inline for (@typeInfo(Command.Measurements).Struct.fields) |field| {
                 const measurement = @field(command.measurements, field.name);
-                try printMeasurement(tty_conf, stdout_w, measurement, field.name);
+                const first_measurement = if (command_n == 1)
+                    null
+                else
+                    @field(commands.items[0].measurements, field.name);
+                try printMeasurement(tty_conf, stdout_w, measurement, field.name, first_measurement, commands.items.len);
             }
 
             try stdout_bw.flush(); // 💩
@@ -302,7 +314,14 @@ const Measurement = struct {
     }
 };
 
-fn printMeasurement(tty_conf: std.io.tty.Config, w: anytype, m: Measurement, name: []const u8) !void {
+fn printMeasurement(
+    tty_conf: std.io.tty.Config,
+    w: anytype,
+    m: Measurement,
+    name: []const u8,
+    first_m: ?Measurement,
+    command_count: usize,
+) !void {
     try w.print("  {s}", .{name});
 
     var buf: [200]u8 = undefined;
@@ -325,17 +344,52 @@ fn printMeasurement(tty_conf: std.io.tty.Config, w: anytype, m: Measurement, nam
     fbs.pos = 0;
     try tty_conf.setColor(w, .reset);
 
-    try w.writeByteNTimes(' ', 47 - ("  measurement      ".len + count + 3));
-    try tty_conf.setColor(w, .reset);
+    try w.writeByteNTimes(' ', 42 - ("  measurement      ".len + count + 3));
+    count = 0;
 
     try tty_conf.setColor(w, .cyan);
-    try printUnit(w, @intToFloat(f64, m.min), m.unit, m.std_dev);
+    try printUnit(fbs.writer(), @intToFloat(f64, m.min), m.unit, m.std_dev);
+    try w.writeAll(fbs.getWritten());
+    count += fbs.pos;
+    fbs.pos = 0;
     try tty_conf.setColor(w, .reset);
     try w.writeAll(" … ");
     try tty_conf.setColor(w, .magenta);
-    try printUnit(w, @intToFloat(f64, m.max), m.unit, m.std_dev);
+    try printUnit(fbs.writer(), @intToFloat(f64, m.max), m.unit, m.std_dev);
+    try w.writeAll(fbs.getWritten());
+    count += fbs.pos;
+    fbs.pos = 0;
     try tty_conf.setColor(w, .reset);
 
+    try w.writeByteNTimes(' ', 25 - (count + 1));
+
+    // ratio
+    if (command_count > 1) {
+        if (first_m) |f| {
+            if (m.mean > f.mean) {
+                try w.writeAll("💩");
+                const factor = m.mean / f.mean;
+                try tty_conf.setColor(w, .bright_red);
+                try fbs.writer().print("{d:0.1}", .{factor});
+                try w.writeAll(fbs.getWritten());
+                count += fbs.pos;
+                fbs.pos = 0;
+            } else {
+                try w.writeAll("⚡");
+                const factor = f.mean / m.mean;
+                try tty_conf.setColor(w, .bright_green);
+                try fbs.writer().print("{d:0.1}", .{factor});
+                try w.writeAll(fbs.getWritten());
+                count += fbs.pos;
+                fbs.pos = 0;
+            }
+        } else {
+            try tty_conf.setColor(w, .dim);
+            try w.writeAll("1.0");
+        }
+    }
+
+    try tty_conf.setColor(w, .reset);
     try w.writeAll("\n");
 }
 
