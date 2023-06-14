@@ -216,7 +216,8 @@ pub fn main() !void {
             try stdout_w.writeAll(":\n");
 
             try tty_conf.setColor(stdout_w, .bold);
-            try stdout_w.writeByteNTimes(' ', 19);
+            try stdout_w.writeAll("  measurement");
+            try stdout_w.writeByteNTimes(' ', 6);
             try stdout_w.writeByteNTimes(' ', max_lens.mean - 4);
             try tty_conf.setColor(stdout_w, .bright_green);
             try stdout_w.writeAll("mean");
