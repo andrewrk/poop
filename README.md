@@ -58,8 +58,15 @@ This project (so far) is brand new, whereas
 configuration options and generally more polish.
 
 However, this project does report peak memory usage as well as 5 other hardware
-counters, which I personally find useful when doing performance testing.
+counters, which I personally find useful when doing performance testing. Hey,
+maybe it will inspire the Hyperfine maintainers to add the extra data points!
 
-Hey, maybe it will inspire the Hyperfine maintainers to add the extra data points!
+This project does not run the commands in a shell. This has the upside of not
+including shell spawning noise in the data points collected, and the downside
+of not supporting strings inside the commands.
+
+This project treats the first command as a reference and the subsequent ones
+relative to it, giving the user the choice of the meaning of the coloring of
+the deltas. Hyperfine always prints the wall-clock-fastest command first.
 
 This project is also Linux-only.
