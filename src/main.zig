@@ -10,7 +10,7 @@ const usage_text =
     \\Compares the performance of the provided commands.
     \\
     \\Options:
-    \\ --duration <ms>    (default: 3000) how long to repeatedly sample each command
+    \\ --duration <ms>    (default: 5000) how long to repeatedly sample each command
 ;
 
 const PerfMeasurement = struct {
@@ -67,7 +67,7 @@ pub fn main() !void {
     const stdout_w = stdout_bw.writer();
 
     var commands = std.ArrayList(Command).init(arena);
-    var max_nano_seconds: u64 = std.time.ns_per_s * 3;
+    var max_nano_seconds: u64 = std.time.ns_per_s * 5;
 
     var arg_i: usize = 1;
     while (arg_i < args.len) : (arg_i += 1) {
@@ -90,9 +90,12 @@ pub fn main() !void {
                 std.debug.print("unable to parse --duration argument '{s}': {s}\n", .{
                     next, @errorName(err),
                 });
-                return std.process.exit(1);
+                std.process.exit(1);
             };
             max_nano_seconds = std.time.ns_per_ms * max_ms;
+        } else {
+            std.debug.print("unrecognized argument: '{s}'\n", .{arg});
+            std.process.exit(1);
         }
     }
 
