@@ -69,4 +69,8 @@ Poop treats the first command as a reference and the subsequent ones
 relative to it, giving the user the choice of the meaning of the coloring of
 the deltas. Hyperfine always prints the wall-clock-fastest command first.
 
+Poop (for now) has clunky handling of digits of precision and alignment in the
+display. See [#4](https://github.com/andrewrk/poop/issues/4) and
+[#10](https://github.com/andrewrk/poop/issues/10).
+
 Poop is also Linux-only.
