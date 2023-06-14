@@ -287,7 +287,7 @@ const Measurement = struct {
     mean: f64,
     std_dev: f64,
     outlier_count: u64,
-    outlier_frac: f64,
+    sample_count: u64,
     unit: Unit,
 
     const Unit = enum {
@@ -340,7 +340,7 @@ const Measurement = struct {
             .max = max,
             .std_dev = std_dev,
             .outlier_count = outlier_count,
-            .outlier_frac = @intToFloat(f64, outlier_count) / @intToFloat(f64, samples.len),
+            .sample_count = samples.len,
             .unit = unit,
         };
     }
@@ -396,11 +396,12 @@ fn printMeasurement(
     try w.writeByteNTimes(' ', 25 - (count + 1));
     count = 0;
 
-    if (m.outlier_frac >= 0.1)
+    const outlier_percent = @intToFloat(f64, m.outlier_count) / @intToFloat(f64, m.sample_count) * 100;
+    if (outlier_percent >= 10)
         try tty_conf.setColor(w, .yellow)
     else
         try tty_conf.setColor(w, .dim);
-    try fbs.writer().print("{d: >4.0} ({d: >2.0}%)", .{ m.outlier_count, m.outlier_frac * 100 });
+    try fbs.writer().print("{d: >4.0} ({d: >2.0}%)", .{ m.outlier_count, outlier_percent });
     try w.writeAll(fbs.getWritten());
     count += fbs.pos;
     fbs.pos = 0;
@@ -411,8 +412,28 @@ fn printMeasurement(
     // ratio
     if (command_count > 1) {
         if (first_m) |f| {
-            const percent = (m.mean - f.mean) / f.mean;
-            const is_sig = @fabs(percent) >= 0.01;
+            const half = blk: {
+                const z = getStatScore95(m.sample_count + f.sample_count - 2);
+                const n1 = @intToFloat(f64, m.sample_count);
+                const n2 = @intToFloat(f64, f.sample_count);
+                const normer = std.math.sqrt(1.0 / n1 + 1.0 / n2);
+                const numer1 = (n1 - 1) * (m.std_dev * m.std_dev);
+                const numer2 = (n2 - 1) * (f.std_dev * f.std_dev);
+                const df = n1 + n2 - 2;
+                const sp = std.math.sqrt((numer1 + numer2) / df);
+                break :blk (z * sp * normer) * 100 / f.mean;
+            };
+            const diff_mean_percent = (m.mean - f.mean) * 100 / f.mean;
+            // significant only if full interval is beyond abs 1% with the same sign
+            const is_sig = blk: {
+                if (diff_mean_percent >= 1 and (diff_mean_percent - half) >= 1) {
+                    break :blk true;
+                } else if (diff_mean_percent <= -1 and (diff_mean_percent + half) <= -1) {
+                    break :blk true;
+                } else {
+                    break :blk false;
+                }
+            };
             if (m.mean > f.mean) {
                 if (is_sig) {
                     try w.writeAll("💩");
@@ -421,10 +442,7 @@ fn printMeasurement(
                     try tty_conf.setColor(w, .dim);
                     try w.writeAll("  ");
                 }
-                try fbs.writer().print("+{d: >4.1}%", .{percent * 100});
-                try w.writeAll(fbs.getWritten());
-                count += fbs.pos;
-                fbs.pos = 0;
+                try w.writeAll("+");
             } else {
                 if (is_sig) {
                     try tty_conf.setColor(w, .bright_yellow);
@@ -434,11 +452,12 @@ fn printMeasurement(
                     try tty_conf.setColor(w, .dim);
                     try w.writeAll("  ");
                 }
-                try fbs.writer().print("-{d: >4.1}%", .{@fabs(percent) * 100});
-                try w.writeAll(fbs.getWritten());
-                count += fbs.pos;
-                fbs.pos = 0;
+                try w.writeAll("-");
             }
+            try fbs.writer().print("{d: >5.1}% ± {d: >4.1}%", .{ @fabs(diff_mean_percent), half });
+            try w.writeAll(fbs.getWritten());
+            count += fbs.pos;
+            fbs.pos = 0;
         } else {
             try tty_conf.setColor(w, .dim);
             try w.writeAll("0%");
@@ -472,3 +491,65 @@ fn printUnit(w: anytype, x: f64, unit: Measurement.Unit, std_dev: f64) !void {
         },
     }
 }
+
+// Gets either the T or Z score for 95% confidence.
+// If no `df` variable is provided, Z score is provided.
+pub fn getStatScore95(df: ?usize) f64 {
+    if (df) |dfv| {
+        if (dfv <= 30) {
+            return t_table95_1to30[dfv - 1];
+        } else if (dfv <= 120) {
+            const idx_10s = @divFloor(dfv, 10);
+            return t_table95_10s_10to120[idx_10s - 1];
+        }
+    }
+    return 1.96;
+}
+
+const t_table95_1to30 = [_]f64{
+    12.706,
+    4.303,
+    3.182,
+    2.776,
+    2.571,
+    2.447,
+    2.365,
+    2.306,
+    2.262,
+    2.228,
+    2.201,
+    2.179,
+    2.16,
+    2.145,
+    2.131,
+    2.12,
+    2.11,
+    2.101,
+    2.093,
+    2.086,
+    2.08,
+    2.074,
+    2.069,
+    2.064,
+    2.06,
+    2.056,
+    2.052,
+    2.045,
+    2.048,
+    2.042,
+};
+
+const t_table95_10s_10to120 = [_]f64{
+    2.228,
+    2.086,
+    2.042,
+    2.021,
+    2.009,
+    2,
+    1.994,
+    1.99,
+    1.987,
+    1.984,
+    1.982,
+    1.98,
+};
