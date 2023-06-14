@@ -231,11 +231,7 @@ pub fn main() !void {
 
             inline for (@typeInfo(Command.Measurements).Struct.fields) |field| {
                 const measurement = @field(command.measurements, field.name);
-                const first_measurement = if (command_n == 1)
-                    null
-                else
-                    @field(commands.items[0].measurements, field.name);
-                try printMeasurement(tty_conf, stdout_w, measurement, field.name, first_measurement, commands.items.len);
+                const first_measurement = if (command_n == 1) null else @field(commands.items[0].measurements, field.name);
             }
 
             try stdout_bw.flush(); // 💩
