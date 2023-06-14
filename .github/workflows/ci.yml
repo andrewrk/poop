@@ -1,7 +1,9 @@
 name: ci
 on:
+  pull_request:
   push:
-
+    branches:
+      - master
 jobs:
   build:
     strategy:
