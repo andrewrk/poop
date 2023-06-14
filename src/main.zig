@@ -11,6 +11,7 @@ const usage_text =
     \\
     \\Options:
     \\ --duration <ms>    (default: 5000) how long to repeatedly sample each command
+    \\
 ;
 
 const PerfMeasurement = struct {
