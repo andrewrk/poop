@@ -83,10 +83,6 @@ pub fn main() !void {
     var max_nano_seconds: u64 = std.time.ns_per_s * 5;
 
     var arg_i: usize = 1;
-    if (args.len < 2) {
-        try stdout.writeAll(usage_text);
-        std.process.exit(1);
-    }
     while (arg_i < args.len) : (arg_i += 1) {
         const arg = args[arg_i];
         if (!std.mem.startsWith(u8, arg, "-")) {
@@ -102,6 +98,10 @@ pub fn main() !void {
             return std.process.cleanExit();
         } else if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--duration")) {
             arg_i += 1;
+            if (arg_i >= args.len) {
+                std.debug.print("'{s}' requires an additional argument.\n{s}", .{ arg, usage_text });
+                std.process.exit(1);
+            }
             const next = args[arg_i];
             const max_ms = std.fmt.parseInt(u64, next, 10) catch |err| {
                 std.debug.print("unable to parse --duration argument '{s}': {s}\n", .{
@@ -114,6 +114,11 @@ pub fn main() !void {
             std.debug.print("unrecognized argument: '{s}'\n{s}", .{ arg, usage_text });
             std.process.exit(1);
         }
+    }
+
+    if (commands.items.len == 0) {
+        try stdout.writeAll(usage_text);
+        std.process.exit(1);
     }
 
     var perf_fds = [1]fd_t{-1} ** perf_measurements.len;
