@@ -10,7 +10,7 @@ const usage_text =
     \\Compares the performance of the provided commands.
     \\
     \\Options:
-    \\ --duration <ms>    (default: 5000) how long to repeatedly sample each command
+    \\ -d, --duration <ms>    (default: 5000) how long to repeatedly sample each command
     \\
 ;
 
@@ -100,7 +100,7 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
             try stdout.writeAll(usage_text);
             return std.process.cleanExit();
-        } else if (std.mem.eql(u8, arg, "--duration")) {
+        } else if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--duration")) {
             arg_i += 1;
             const next = args[arg_i];
             const max_ms = std.fmt.parseInt(u64, next, 10) catch |err| {
