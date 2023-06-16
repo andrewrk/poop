@@ -83,6 +83,10 @@ pub fn main() !void {
     var max_nano_seconds: u64 = std.time.ns_per_s * 5;
 
     var arg_i: usize = 1;
+    if (args.len < 2) {
+        try stdout.writeAll(usage_text);
+        std.process.exit(1);
+    }
     while (arg_i < args.len) : (arg_i += 1) {
         const arg = args[arg_i];
         if (!std.mem.startsWith(u8, arg, "-")) {
@@ -107,7 +111,7 @@ pub fn main() !void {
             };
             max_nano_seconds = std.time.ns_per_ms * max_ms;
         } else {
-            std.debug.print("unrecognized argument: '{s}'\n", .{arg});
+            std.debug.print("unrecognized argument: '{s}'\n{s}", .{ arg, usage_text });
             std.process.exit(1);
         }
     }
