@@ -28,6 +28,7 @@ const perf_measurements = [_]PerfMeasurement{
 };
 
 const Command = struct {
+    raw_cmd: []const u8,
     argv: []const []const u8,
     measurements: Measurements,
     sample_count: usize,
@@ -89,6 +90,7 @@ pub fn main() !void {
             var cmd_argv = std.ArrayList([]const u8).init(arena);
             try parseCmd(&cmd_argv, arg);
             try commands.append(.{
+                .raw_cmd = arg,
                 .argv = try cmd_argv.toOwnedSlice(),
                 .measurements = undefined,
                 .sample_count = undefined,
@@ -121,15 +123,33 @@ pub fn main() !void {
         std.process.exit(1);
     }
 
+    var progress: std.Progress = .{};
+    const root_node = progress.start("poop", commands.items.len);
+    defer root_node.end();
+
+
     var perf_fds = [1]fd_t{-1} ** perf_measurements.len;
     var samples_buf: [10000]Sample = undefined;
 
     var timer = std.time.Timer.start() catch @panic("need timer to work");
 
     for (commands.items, 1..) |*command, command_n| {
+        const max_prog_name_len = 50;
+        const prog_name = blk: {
+            if (command.raw_cmd.len > max_prog_name_len) {
+                break :blk try std.fmt.allocPrint(arena, "'{s}...'", .{command.raw_cmd[0 .. max_prog_name_len - 3]});
+            }
+            break :blk try std.fmt.allocPrint(arena, "'{s}'", .{command.raw_cmd});
+        };
+        var cmd_prog_node = root_node.start(prog_name, 0);
+        cmd_prog_node.activate();
+        progress.refresh();
+
+        const min_samples = 3;
+
         const first_start = timer.read();
         var sample_index: usize = 0;
-        while ((sample_index < 3 or
+        while ((sample_index < min_samples or
             (timer.read() - first_start) < max_nano_seconds) and
             sample_index < samples_buf.len) : (sample_index += 1)
         {
@@ -193,7 +213,17 @@ pub fn main() !void {
                 std.os.close(perf_fd.*);
                 perf_fd.* = -1;
             }
+
+            cmd_prog_node.setEstimatedTotalItems(est_total: {
+                const cur_samples: u64 = sample_index + 1;
+                const ns_per_sample = (timer.read() - first_start) / cur_samples;
+                const estimate = std.math.divCeil(u64, max_nano_seconds, ns_per_sample) catch unreachable;
+                break :est_total @intCast(usize, @max(cur_samples, estimate, min_samples));
+            });
+            cmd_prog_node.completeOne();
         }
+
+        cmd_prog_node.end();
 
         const all_samples = samples_buf[0..sample_index];
 
@@ -209,6 +239,9 @@ pub fn main() !void {
         command.sample_count = all_samples.len;
 
         {
+            progress.lock_stderr();
+            defer progress.unlock_stderr();
+
             try tty_conf.setColor(stdout_w, .bold);
             try stdout_w.print("Benchmark {d}", .{command_n});
             try tty_conf.setColor(stdout_w, .dim);
