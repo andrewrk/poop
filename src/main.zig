@@ -10,7 +10,7 @@ const usage_text =
     \\Compares the performance of the provided commands.
     \\
     \\Options:
-    \\ --duration <ms>    (default: 5000) how long to repeatedly sample each command
+    \\ -d, --duration <ms>    (default: 5000) how long to repeatedly sample each command
     \\
 ;
 
@@ -98,8 +98,12 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
             try stdout.writeAll(usage_text);
             return std.process.cleanExit();
-        } else if (std.mem.eql(u8, arg, "--duration")) {
+        } else if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--duration")) {
             arg_i += 1;
+            if (arg_i >= args.len) {
+                std.debug.print("'{s}' requires an additional argument.\n{s}", .{ arg, usage_text });
+                std.process.exit(1);
+            }
             const next = args[arg_i];
             const max_ms = std.fmt.parseInt(u64, next, 10) catch |err| {
                 std.debug.print("unable to parse --duration argument '{s}': {s}\n", .{
@@ -109,14 +113,20 @@ pub fn main() !void {
             };
             max_nano_seconds = std.time.ns_per_ms * max_ms;
         } else {
-            std.debug.print("unrecognized argument: '{s}'\n", .{arg});
+            std.debug.print("unrecognized argument: '{s}'\n{s}", .{ arg, usage_text });
             std.process.exit(1);
         }
+    }
+
+    if (commands.items.len == 0) {
+        try stdout.writeAll(usage_text);
+        std.process.exit(1);
     }
 
     var progress: std.Progress = .{};
     const root_node = progress.start("poop", commands.items.len);
     defer root_node.end();
+
 
     var perf_fds = [1]fd_t{-1} ** perf_measurements.len;
     var samples_buf: [10000]Sample = undefined;
