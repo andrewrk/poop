@@ -68,6 +68,8 @@ const Sample = struct {
     }
 };
 
+const column_separator = "    ";
+
 pub fn main() !void {
     var arena_instance = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena_instance.deinit();
@@ -241,6 +243,39 @@ pub fn main() !void {
         command.sample_count = all_samples.len;
 
         {
+            var max_alignments: AlignInfo = .{
+                .mean = "mean".len,
+                .min_max = "min".len,
+                .outliers = 0,
+                .delta = 0,
+                .delta_symbol = 0,
+            };
+            var align_info: [@typeInfo(Command.Measurements).Struct.fields.len]AlignInfo = undefined;
+            inline for (&align_info, @typeInfo(Command.Measurements).Struct.fields) |*pad, field| {
+                const first_measurement = if (command_n == 1)
+                    null
+                else
+                    @field(commands.items[0].measurements, field.name);
+
+                pad.* = sizeMeasurement(
+                    @field(command.measurements, field.name),
+                    first_measurement,
+                    commands.items.len,
+                );
+                inline for (@typeInfo(AlignInfo).Struct.fields) |f| {
+                    @field(max_alignments, f.name) = @max(
+                        @field(max_alignments, f.name),
+                        @field(pad, f.name),
+                    );
+                }
+            }
+            for (&align_info) |*pad| {
+                pad.mean = max_alignments.mean - pad.mean;
+                pad.min_max = max_alignments.min_max - pad.min_max;
+                pad.outliers = max_alignments.outliers - pad.outliers;
+                pad.delta = max_alignments.delta - pad.delta;
+            }
+
             try tty_conf.setColor(stdout_w, .bold);
             try stdout_w.print("Benchmark {d}", .{command_n});
             try tty_conf.setColor(stdout_w, .dim);
@@ -252,7 +287,9 @@ pub fn main() !void {
 
             try tty_conf.setColor(stdout_w, .bold);
             try stdout_w.writeAll("  measurement");
-            try stdout_w.writeByteNTimes(' ', 19 - "  measurement".len);
+            try stdout_w.writeAll(column_separator);
+            try stdout_w.writeByteNTimes(' ', "cache_references ".len - "measurement".len +
+                max_alignments.mean - "mean".len);
             try tty_conf.setColor(stdout_w, .bright_green);
             try stdout_w.writeAll("mean");
             try tty_conf.setColor(stdout_w, .reset);
@@ -263,7 +300,8 @@ pub fn main() !void {
             try tty_conf.setColor(stdout_w, .reset);
 
             try tty_conf.setColor(stdout_w, .bold);
-            try stdout_w.writeByteNTimes(' ', 15);
+            try stdout_w.writeAll(column_separator);
+            try stdout_w.writeByteNTimes(' ', max_alignments.min_max - "mean".len);
             try tty_conf.setColor(stdout_w, .cyan);
             try stdout_w.writeAll("min");
             try tty_conf.setColor(stdout_w, .reset);
@@ -274,27 +312,37 @@ pub fn main() !void {
             try tty_conf.setColor(stdout_w, .reset);
 
             try tty_conf.setColor(stdout_w, .bold);
-            try stdout_w.writeByteNTimes(' ', 28 - " outliers".len);
+            try stdout_w.writeAll(column_separator);
+            try stdout_w.writeByteNTimes(' ', max_alignments.outliers - "max".len);
             try tty_conf.setColor(stdout_w, .bright_yellow);
             try stdout_w.writeAll("outliers");
             try tty_conf.setColor(stdout_w, .reset);
 
             if (commands.items.len >= 2) {
                 try tty_conf.setColor(stdout_w, .bold);
-                try stdout_w.writeByteNTimes(' ', 9);
+                try stdout_w.writeAll(column_separator);
+                try stdout_w.writeByteNTimes(' ', max_alignments.delta + max_alignments.delta_symbol);
                 try stdout_w.writeAll("delta");
                 try tty_conf.setColor(stdout_w, .reset);
             }
 
             try stdout_w.writeAll("\n");
 
-            inline for (@typeInfo(Command.Measurements).Struct.fields) |field| {
+            inline for (@typeInfo(Command.Measurements).Struct.fields, align_info) |field, alignment| {
                 const measurement = @field(command.measurements, field.name);
                 const first_measurement = if (command_n == 1)
                     null
                 else
                     @field(commands.items[0].measurements, field.name);
-                try printMeasurement(tty_conf, stdout_w, measurement, field.name, first_measurement, commands.items.len);
+                try printMeasurement(
+                    tty_conf,
+                    stdout_w,
+                    measurement,
+                    field.name,
+                    first_measurement,
+                    commands.items.len,
+                    alignment,
+                );
             }
 
             try stdout_bw.flush(); // 💩
@@ -387,6 +435,19 @@ const Measurement = struct {
     }
 };
 
+const PrintMode = enum {
+    alignment,
+    print,
+};
+
+const AlignInfo = struct {
+    mean: usize,
+    min_max: usize,
+    outliers: usize,
+    delta_symbol: usize,
+    delta: usize,
+};
+
 fn printMeasurement(
     tty_conf: std.io.tty.Config,
     w: anytype,
@@ -394,64 +455,80 @@ fn printMeasurement(
     name: []const u8,
     first_m: ?Measurement,
     command_count: usize,
+    align_info: AlignInfo,
 ) !void {
+    _ = try printMeasurementInner(tty_conf, w, m, name, first_m, command_count, align_info);
+}
+
+fn sizeMeasurement(m: Measurement, first_m: ?Measurement, command_count: usize) AlignInfo {
+    return printMeasurementInner(
+        .no_color,
+        std.io.null_writer,
+        m,
+        "",
+        first_m,
+        command_count,
+        std.mem.zeroes(AlignInfo),
+    ) catch unreachable;
+}
+
+fn printMeasurementInner(
+    tty_conf: std.io.tty.Config,
+    w: anytype,
+    m: Measurement,
+    name: []const u8,
+    first_m: ?Measurement,
+    command_count: usize,
+    align_info: AlignInfo,
+) !AlignInfo {
     try w.print("  {s}", .{name});
 
-    var buf: [200]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    var count: usize = 0;
-
-    const spaces = 30 - ("  (mean  ):".len + name.len + 2);
+    const spaces = "cache_references ".len - name.len;
     try w.writeByteNTimes(' ', spaces);
+
+    // mean
+    try w.writeAll(column_separator);
+    try w.writeByteNTimes(' ', align_info.mean);
     try tty_conf.setColor(w, .bright_green);
-    try printUnit(fbs.writer(), m.mean, m.unit, m.std_dev);
-    try w.writeAll(fbs.getWritten());
-    count += fbs.pos;
-    fbs.pos = 0;
+    const size_mean = try printUnit(w, m.mean, m.unit, m.std_dev);
+
     try tty_conf.setColor(w, .reset);
     try w.writeAll(" ± ");
+
     try tty_conf.setColor(w, .green);
-    try printUnit(fbs.writer(), m.std_dev, m.unit, 0);
-    try w.writeAll(fbs.getWritten());
-    count += fbs.pos;
-    fbs.pos = 0;
+    const size_stddev = try printUnit(w, m.std_dev, m.unit, 0);
     try tty_conf.setColor(w, .reset);
 
-    try w.writeByteNTimes(' ', 42 - ("  measurement      ".len + count + 3));
-    count = 0;
+    // min max
+    try w.writeAll(column_separator);
+    try w.writeByteNTimes(' ', align_info.min_max);
 
     try tty_conf.setColor(w, .cyan);
-    try printUnit(fbs.writer(), @intToFloat(f64, m.min), m.unit, m.std_dev);
-    try w.writeAll(fbs.getWritten());
-    count += fbs.pos;
-    fbs.pos = 0;
+    const size_min = try printUnit(w, @intToFloat(f64, m.min), m.unit, m.std_dev);
+
     try tty_conf.setColor(w, .reset);
     try w.writeAll(" … ");
+
     try tty_conf.setColor(w, .magenta);
-    try printUnit(fbs.writer(), @intToFloat(f64, m.max), m.unit, m.std_dev);
-    try w.writeAll(fbs.getWritten());
-    count += fbs.pos;
-    fbs.pos = 0;
+    const size_max = try printUnit(w, @intToFloat(f64, m.max), m.unit, m.std_dev);
     try tty_conf.setColor(w, .reset);
 
-    try w.writeByteNTimes(' ', 25 - (count + 1));
-    count = 0;
+    // outliers
+    try w.writeAll(column_separator);
+    try w.writeByteNTimes(' ', align_info.outliers);
 
     const outlier_percent = @intToFloat(f64, m.outlier_count) / @intToFloat(f64, m.sample_count) * 100;
     if (outlier_percent >= 10)
         try tty_conf.setColor(w, .yellow)
     else
         try tty_conf.setColor(w, .dim);
-    try fbs.writer().print("{d: >4.0} ({d: >2.0}%)", .{ m.outlier_count, outlier_percent });
-    try w.writeAll(fbs.getWritten());
-    count += fbs.pos;
-    fbs.pos = 0;
+    const size_outliers = try printUnit(w, @intToFloat(f64, m.outlier_count), .count, 0);
+    try w.print(" ({d: >2.0}%)", .{outlier_percent});
     try tty_conf.setColor(w, .reset);
 
-    try w.writeByteNTimes(' ', 19 - (count + 1));
-
     // ratio
-    if (command_count > 1) {
+    const size_delta = if (command_count > 1) size_delta: {
+        try w.writeAll(column_separator);
         if (first_m) |f| {
             const half = blk: {
                 const z = getStatScore95(m.sample_count + f.sample_count - 2);
@@ -475,6 +552,7 @@ fn printMeasurement(
                     break :blk false;
                 }
             };
+            try w.writeByteNTimes(' ', align_info.delta_symbol);
             if (m.mean > f.mean) {
                 if (is_sig) {
                     try w.writeAll("💩");
@@ -483,7 +561,7 @@ fn printMeasurement(
                     try tty_conf.setColor(w, .dim);
                     try w.writeAll("  ");
                 }
-                try w.writeAll("+");
+                try w.writeAll(" +");
             } else {
                 if (is_sig) {
                     try tty_conf.setColor(w, .bright_yellow);
@@ -493,24 +571,41 @@ fn printMeasurement(
                     try tty_conf.setColor(w, .dim);
                     try w.writeAll("  ");
                 }
-                try w.writeAll("-");
+                try w.writeAll(" -");
             }
-            try fbs.writer().print("{d: >5.1}% ± {d: >4.1}%", .{ @fabs(diff_mean_percent), half });
-            try w.writeAll(fbs.getWritten());
-            count += fbs.pos;
-            fbs.pos = 0;
+            try w.writeByteNTimes(' ', align_info.delta);
+            const size_delta = blk: {
+                var counting_writer = std.io.countingWriter(w);
+                try counting_writer.writer().print("{d:.1}%", .{@fabs(diff_mean_percent)});
+                break :blk @intCast(usize, counting_writer.bytes_written);
+            };
+            try w.print(" ± {d: >4.1}%", .{half});
+            break :size_delta size_delta;
         } else {
+            try w.writeByteNTimes(' ', align_info.delta);
             try tty_conf.setColor(w, .dim);
-            try w.writeAll("0%");
+            try w.writeAll("  0%");
+            break :size_delta 0;
         }
-    }
+    } else 0;
 
     try tty_conf.setColor(w, .reset);
     try w.writeAll("\n");
+
+    return AlignInfo{
+        .mean = size_mean,
+        .min_max = size_stddev + size_min,
+        .outliers = size_max,
+        .delta_symbol = size_outliers,
+        .delta = size_delta,
+    };
 }
 
-fn printUnit(w: anytype, x: f64, unit: Measurement.Unit, std_dev: f64) !void {
+fn printUnit(writer: anytype, x: f64, unit: Measurement.Unit, std_dev: f64) !usize {
     _ = std_dev; // TODO something useful with this
+    var counting_writer = std.io.countingWriter(writer);
+    const w = counting_writer.writer();
+
     const int = @floatToInt(u64, @round(x));
     switch (unit) {
         .count => {
@@ -531,6 +626,7 @@ fn printUnit(w: anytype, x: f64, unit: Measurement.Unit, std_dev: f64) !void {
             }
         },
     }
+    return @intCast(usize, counting_writer.bytes_written);
 }
 
 // Gets either the T or Z score for 95% confidence.
