@@ -3,6 +3,8 @@ const PERF = std.os.linux.PERF;
 const fd_t = std.os.fd_t;
 const pid_t = std.os.pid_t;
 const assert = std.debug.assert;
+const boi = @import("./progress.zig");
+const MAX_SAMPLES = 10000;
 
 const usage_text =
     \\Usage: poop [options] <command1> ... <commandN>
@@ -123,13 +125,11 @@ pub fn main() !void {
         std.process.exit(1);
     }
 
-    var progress: std.Progress = .{};
-    const root_node = progress.start("poop", commands.items.len);
-    defer root_node.end();
-
+    var bar = try boi.ProgressBar.init(arena, stdout);
+    defer bar.deinit();
 
     var perf_fds = [1]fd_t{-1} ** perf_measurements.len;
-    var samples_buf: [10000]Sample = undefined;
+    var samples_buf: [MAX_SAMPLES]Sample = undefined;
 
     var timer = std.time.Timer.start() catch @panic("need timer to work");
 
@@ -141,9 +141,7 @@ pub fn main() !void {
             }
             break :blk try std.fmt.allocPrint(arena, "'{s}'", .{command.raw_cmd});
         };
-        var cmd_prog_node = root_node.start(prog_name, 0);
-        cmd_prog_node.activate();
-        progress.refresh();
+        _ = prog_name;
 
         const min_samples = 3;
 
@@ -153,6 +151,7 @@ pub fn main() !void {
             (timer.read() - first_start) < max_nano_seconds) and
             sample_index < samples_buf.len) : (sample_index += 1)
         {
+            try bar.render();
             for (perf_measurements, &perf_fds) |measurement, *perf_fd| {
                 var attr: std.os.linux.perf_event_attr = .{
                     .type = PERF.TYPE.HARDWARE,
@@ -214,16 +213,19 @@ pub fn main() !void {
                 perf_fd.* = -1;
             }
 
-            cmd_prog_node.setEstimatedTotalItems(est_total: {
+            bar.estimate = est_total: {
                 const cur_samples: u64 = sample_index + 1;
                 const ns_per_sample = (timer.read() - first_start) / cur_samples;
                 const estimate = std.math.divCeil(u64, max_nano_seconds, ns_per_sample) catch unreachable;
-                break :est_total @intCast(usize, @max(cur_samples, estimate, min_samples));
-            });
-            cmd_prog_node.completeOne();
+                break :est_total @intCast(usize, @min(MAX_SAMPLES, @max(cur_samples, estimate, min_samples)));
+            };
+            bar.current += 1;
         }
 
-        cmd_prog_node.end();
+        // reset bar for next command
+        try bar.clear();
+        bar.current = 0;
+        bar.estimate = 1;
 
         const all_samples = samples_buf[0..sample_index];
 
@@ -239,9 +241,6 @@ pub fn main() !void {
         command.sample_count = all_samples.len;
 
         {
-            progress.lock_stderr();
-            defer progress.unlock_stderr();
-
             try tty_conf.setColor(stdout_w, .bold);
             try stdout_w.print("Benchmark {d}", .{command_n});
             try tty_conf.setColor(stdout_w, .dim);
@@ -249,7 +248,7 @@ pub fn main() !void {
             try tty_conf.setColor(stdout_w, .reset);
             try stdout_w.writeAll(":");
             for (command.argv) |arg| try stdout_w.print(" {s}", .{arg});
-            try stdout_w.writeAll(":\n");
+            try stdout_w.writeAll("\n");
 
             try tty_conf.setColor(stdout_w, .bold);
             try stdout_w.writeAll("  measurement");
