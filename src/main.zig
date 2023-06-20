@@ -161,9 +161,14 @@ pub fn main() !void {
     var perf_fds = [1]fd_t{-1} ** perf_measurements.len;
     var samples_buf: [MAX_SAMPLES]Sample = undefined;
 
+    var stderr_buffer: [4096]u8 = undefined;
+    var stderr_fba = std.heap.FixedBufferAllocator.init(&stderr_buffer);
+
     var timer = std.time.Timer.start() catch @panic("need timer to work");
 
     for (commands.items, 1..) |*command, command_n| {
+        stderr_fba.reset();
+
         const max_prog_name_len = 50;
         const prog_name = blk: {
             if (command.raw_cmd.len > max_prog_name_len) {
@@ -206,11 +211,36 @@ pub fn main() !void {
 
             child.stdin_behavior = .Ignore;
             child.stdout_behavior = .Ignore;
-            child.stderr_behavior = .Ignore;
+            child.stderr_behavior = .Pipe;
             child.request_resource_usage_statistics = true;
 
             const start = timer.read();
             try child.spawn();
+
+            var poller = std.io.poll(stderr_fba.allocator(), enum { stderr }, .{ .stderr = child.stderr.? });
+            defer poller.deinit();
+
+            const child_stderr = poller.fifo(.stderr);
+            var stderr_truncated = false;
+
+            while (true) {
+                const keep_polling = poller.poll() catch {
+                    stderr_truncated = true;
+                    break;
+                };
+                if (!keep_polling) break;
+            }
+
+            if (stderr_truncated) {
+                // continue reading to consume all stderr to prevent deadlocking
+                var overflow_buffer: [4096]u8 = undefined;
+
+                while (true) {
+                    const amt = child.stderr.?.read(&overflow_buffer) catch break;
+                    if (amt == 0) break;
+                }
+            }
+
             const term = try child.wait();
             const end = timer.read();
             _ = std.os.linux.ioctl(perf_fds[0], PERF.EVENT_IOC.DISABLE, PERF.IOC_FLAG_GROUP);
@@ -219,7 +249,31 @@ pub fn main() !void {
             switch (term) {
                 .Exited => |code| {
                     if (code != 0) {
-                        std.debug.print("error: exit code {d}\n", .{code});
+                        bar.clear() catch {};
+                        std.debug.print("\nerror: Benchmark {d} command '{s}' failed with exit code {d}:\n", .{
+                            command_n,
+                            command.raw_cmd,
+                            code,
+                        });
+                        if (stderr_truncated) {
+                            std.debug.print(
+                                \\────────────── truncated stderr ──────────────
+                                \\{s}
+                                \\──────────────────────────────────────────────
+                                \\
+                            ,
+                                .{child_stderr.buf[child_stderr.head..][0..child_stderr.count]},
+                            );
+                        } else {
+                            std.debug.print(
+                                \\─────────────────── stderr ───────────────────
+                                \\{s}
+                                \\──────────────────────────────────────────────
+                                \\
+                            ,
+                                .{child_stderr.buf[child_stderr.head..][0..child_stderr.count]},
+                            );
+                        }
                         std.process.exit(1);
                     }
                 },
