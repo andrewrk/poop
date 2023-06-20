@@ -83,8 +83,6 @@ pub fn main() !void {
 
     const args = try std.process.argsAlloc(arena);
 
-    const stderr = std.io.getStdErr();
-    const stderr_w = stderr.writer();
     const stdout = std.io.getStdOut();
     var stdout_bw = std.io.bufferedWriter(stdout.writer());
     const stdout_w = stdout_bw.writer();
@@ -155,7 +153,7 @@ pub fn main() !void {
     defer bar.deinit();
 
     const tty_conf: std.io.tty.Config = switch (color) {
-        .auto => std.io.tty.detectConfig(std.io.getStdErr()),
+        .auto => std.io.tty.detectConfig(stdout),
         .never => .no_color,
         .ansi => .escape_codes,
     };
@@ -333,7 +331,6 @@ pub fn main() !void {
         }
     }
 
-    _ = stderr_w;
     try stdout_bw.flush(); // 💩
 }
 
