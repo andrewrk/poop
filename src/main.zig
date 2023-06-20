@@ -248,7 +248,6 @@ pub fn main() !void {
                 .min_max = "min".len,
                 .outliers = 0,
                 .delta = 0,
-                .delta_symbol = 0,
             };
             var align_info: [@typeInfo(Command.Measurements).Struct.fields.len]AlignInfo = undefined;
             inline for (&align_info, @typeInfo(Command.Measurements).Struct.fields) |*pad, field| {
@@ -313,7 +312,7 @@ pub fn main() !void {
 
             try tty_conf.setColor(stdout_w, .bold);
             try stdout_w.writeAll(column_separator);
-            try stdout_w.writeByteNTimes(' ', max_alignments.outliers - "max".len);
+            try stdout_w.writeByteNTimes(' ', max_alignments.outliers - "max".len - 2);
             try tty_conf.setColor(stdout_w, .bright_yellow);
             try stdout_w.writeAll("outliers");
             try tty_conf.setColor(stdout_w, .reset);
@@ -321,7 +320,7 @@ pub fn main() !void {
             if (commands.items.len >= 2) {
                 try tty_conf.setColor(stdout_w, .bold);
                 try stdout_w.writeAll(column_separator);
-                try stdout_w.writeByteNTimes(' ', max_alignments.delta + max_alignments.delta_symbol);
+                try stdout_w.writeByteNTimes(' ', max_alignments.delta);
                 try stdout_w.writeAll("delta");
                 try tty_conf.setColor(stdout_w, .reset);
             }
@@ -444,7 +443,6 @@ const AlignInfo = struct {
     mean: usize,
     min_max: usize,
     outliers: usize,
-    delta_symbol: usize,
     delta: usize,
 };
 
@@ -552,7 +550,6 @@ fn printMeasurementInner(
                     break :blk false;
                 }
             };
-            try w.writeByteNTimes(' ', align_info.delta_symbol);
             if (m.mean > f.mean) {
                 if (is_sig) {
                     try w.writeAll("💩");
@@ -595,8 +592,7 @@ fn printMeasurementInner(
     return AlignInfo{
         .mean = size_mean,
         .min_max = size_stddev + size_min,
-        .outliers = size_max,
-        .delta_symbol = size_outliers,
+        .outliers = size_max  + size_outliers,
         .delta = size_delta,
     };
 }
