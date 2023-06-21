@@ -7,7 +7,7 @@ Stop flushing your performance down the drain.
 This command line tool uses Linux's `perf_event_open` functionality to compare the performance of multiple commands
 with a colorful terminal user interface.
 
-![image](https://github.com/andrewrk/poop/assets/106511/c4f4d4f1-c25e-473c-bdd2-95a0692d280f)
+![image](https://github.com/andrewrk/poop/assets/106511/6fc9d22b-f95b-46ce-8dc5-d5cecc77c226)
 
 ## Usage
 
