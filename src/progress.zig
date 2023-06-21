@@ -36,7 +36,7 @@ const Winsize = extern struct {
 
 pub fn getScreenWidth(stdout: std.os.fd_t) usize {
     var winsize: Winsize = undefined;
-    _ = std.os.linux.ioctl(stdout, TIOCGWINSZ, @ptrToInt(&winsize));
+    _ = std.os.linux.ioctl(stdout, TIOCGWINSZ, @intFromPtr(&winsize));
     return @intCast(usize, winsize.ws_col);
 }
 
@@ -115,7 +115,7 @@ pub const ProgressBar = struct {
             try writer.print(bar, .{});
         }
         try writer.print("{s}", .{EscapeCodes.reset}); // reset
-        try writer.print(" {d: >3.0}% ", .{@intToFloat(f64, self.current) * 100 / @intToFloat(f64, self.estimate)});
+        try writer.print(" {d: >3.0}% ", .{@floatFromInt(f64, self.current) * 100 / @floatFromInt(f64, self.estimate)});
         try self.stdout.writeAll(self.buf.items[0..self.buf.items.len]);
     }
 

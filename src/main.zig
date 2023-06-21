@@ -155,7 +155,7 @@ pub fn main() !void {
             for (perf_measurements, &perf_fds) |measurement, *perf_fd| {
                 var attr: std.os.linux.perf_event_attr = .{
                     .type = PERF.TYPE.HARDWARE,
-                    .config = @enumToInt(measurement.config),
+                    .config = @intFromEnum(measurement.config),
                     .flags = .{
                         .disabled = true,
                         .exclude_kernel = true,
@@ -349,15 +349,15 @@ const Measurement = struct {
             if (v < min) min = v;
             if (v > max) max = v;
         }
-        const mean = @intToFloat(f64, total) / @intToFloat(f64, samples.len);
+        const mean = @floatFromInt(f64, total) / @floatFromInt(f64, samples.len);
         var std_dev: f64 = 0;
         for (samples) |s| {
             const v = @field(s, field);
-            const delta = @intToFloat(f64, v) - mean;
+            const delta = @floatFromInt(f64, v) - mean;
             std_dev += delta * delta;
         }
         if (samples.len > 1) {
-            std_dev /= @intToFloat(f64, samples.len - 1);
+            std_dev /= @floatFromInt(f64, samples.len - 1);
             std_dev = @sqrt(std_dev);
         }
 
@@ -365,11 +365,11 @@ const Measurement = struct {
         const q3 = if (samples.len < 4) @field(samples[samples.len - 1], field) else @field(samples[samples.len - samples.len / 4], field);
         // Tukey's Fences outliers
         var outlier_count: u64 = 0;
-        const iqr = @intToFloat(f64, q3 - q1);
-        const low_fence = @intToFloat(f64, q1) - 1.5 * iqr;
-        const high_fence = @intToFloat(f64, q3) + 1.5 * iqr;
+        const iqr = @floatFromInt(f64, q3 - q1);
+        const low_fence = @floatFromInt(f64, q1) - 1.5 * iqr;
+        const high_fence = @floatFromInt(f64, q3) + 1.5 * iqr;
         for (samples) |s| {
-            const v = @intToFloat(f64, @field(s, field));
+            const v = @floatFromInt(f64, @field(s, field));
             if (v < low_fence or v > high_fence) outlier_count += 1;
         }
         return .{
@@ -421,14 +421,14 @@ fn printMeasurement(
     count = 0;
 
     try tty_conf.setColor(w, .cyan);
-    try printUnit(fbs.writer(), @intToFloat(f64, m.min), m.unit, m.std_dev);
+    try printUnit(fbs.writer(), @floatFromInt(f64, m.min), m.unit, m.std_dev);
     try w.writeAll(fbs.getWritten());
     count += fbs.pos;
     fbs.pos = 0;
     try tty_conf.setColor(w, .reset);
     try w.writeAll(" … ");
     try tty_conf.setColor(w, .magenta);
-    try printUnit(fbs.writer(), @intToFloat(f64, m.max), m.unit, m.std_dev);
+    try printUnit(fbs.writer(), @floatFromInt(f64, m.max), m.unit, m.std_dev);
     try w.writeAll(fbs.getWritten());
     count += fbs.pos;
     fbs.pos = 0;
@@ -437,7 +437,7 @@ fn printMeasurement(
     try w.writeByteNTimes(' ', 46 - (count + 1));
     count = 0;
 
-    const outlier_percent = @intToFloat(f64, m.outlier_count) / @intToFloat(f64, m.sample_count) * 100;
+    const outlier_percent = @floatFromInt(f64, m.outlier_count) / @floatFromInt(f64, m.sample_count) * 100;
     if (outlier_percent >= 10)
         try tty_conf.setColor(w, .yellow)
     else
@@ -455,8 +455,8 @@ fn printMeasurement(
         if (first_m) |f| {
             const half = blk: {
                 const z = getStatScore95(m.sample_count + f.sample_count - 2);
-                const n1 = @intToFloat(f64, m.sample_count);
-                const n2 = @intToFloat(f64, f.sample_count);
+                const n1 = @floatFromInt(f64, m.sample_count);
+                const n2 = @floatFromInt(f64, f.sample_count);
                 const normer = std.math.sqrt(1.0 / n1 + 1.0 / n2);
                 const numer1 = (n1 - 1) * (m.std_dev * m.std_dev);
                 const numer2 = (n2 - 1) * (f.std_dev * f.std_dev);

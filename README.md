@@ -23,7 +23,7 @@ Options:
 
 ## Building from Source
 
-Tested with [Zig](https://ziglang.org/) `0.11.0-dev.3625+129afba46`.
+Tested with [Zig](https://ziglang.org/) `0.11.0-dev.3771+128fd7dd0`.
 
 ```
 zig build
