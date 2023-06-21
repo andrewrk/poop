@@ -3,7 +3,7 @@ const PERF = std.os.linux.PERF;
 const fd_t = std.os.fd_t;
 const pid_t = std.os.pid_t;
 const assert = std.debug.assert;
-const boi = @import("./progress.zig");
+const progress = @import("./progress.zig");
 const MAX_SAMPLES = 10000;
 
 const usage_text =
@@ -125,7 +125,7 @@ pub fn main() !void {
         std.process.exit(1);
     }
 
-    var bar = try boi.ProgressBar.init(arena, stdout);
+    var bar = try progress.ProgressBar.init(arena, stdout);
     defer bar.deinit();
 
     var perf_fds = [1]fd_t{-1} ** perf_measurements.len;
@@ -252,7 +252,7 @@ pub fn main() !void {
 
             try tty_conf.setColor(stdout_w, .bold);
             try stdout_w.writeAll("  measurement");
-            try stdout_w.writeByteNTimes(' ', 19 - "  measurement".len);
+            try stdout_w.writeByteNTimes(' ', 23 - "  measurement".len);
             try tty_conf.setColor(stdout_w, .bright_green);
             try stdout_w.writeAll("mean");
             try tty_conf.setColor(stdout_w, .reset);
@@ -263,7 +263,7 @@ pub fn main() !void {
             try tty_conf.setColor(stdout_w, .reset);
 
             try tty_conf.setColor(stdout_w, .bold);
-            try stdout_w.writeByteNTimes(' ', 15);
+            try stdout_w.writeByteNTimes(' ', 12);
             try tty_conf.setColor(stdout_w, .cyan);
             try stdout_w.writeAll("min");
             try tty_conf.setColor(stdout_w, .reset);
@@ -274,7 +274,7 @@ pub fn main() !void {
             try tty_conf.setColor(stdout_w, .reset);
 
             try tty_conf.setColor(stdout_w, .bold);
-            try stdout_w.writeByteNTimes(' ', 28 - " outliers".len);
+            try stdout_w.writeByteNTimes(' ', 20 - " outliers".len);
             try tty_conf.setColor(stdout_w, .bright_yellow);
             try stdout_w.writeAll("outliers");
             try tty_conf.setColor(stdout_w, .reset);
@@ -401,7 +401,7 @@ fn printMeasurement(
     var fbs = std.io.fixedBufferStream(&buf);
     var count: usize = 0;
 
-    const spaces = 30 - ("  (mean  ):".len + name.len + 2);
+    const spaces = 32 - ("  (mean  ):".len + name.len + 2);
     try w.writeByteNTimes(' ', spaces);
     try tty_conf.setColor(w, .bright_green);
     try printUnit(fbs.writer(), m.mean, m.unit, m.std_dev);
@@ -417,7 +417,7 @@ fn printMeasurement(
     fbs.pos = 0;
     try tty_conf.setColor(w, .reset);
 
-    try w.writeByteNTimes(' ', 42 - ("  measurement      ".len + count + 3));
+    try w.writeByteNTimes(' ', 64 - ("  measurement      ".len + count + 3));
     count = 0;
 
     try tty_conf.setColor(w, .cyan);
@@ -434,7 +434,7 @@ fn printMeasurement(
     fbs.pos = 0;
     try tty_conf.setColor(w, .reset);
 
-    try w.writeByteNTimes(' ', 25 - (count + 1));
+    try w.writeByteNTimes(' ', 46 - (count + 1));
     count = 0;
 
     const outlier_percent = @intToFloat(f64, m.outlier_count) / @intToFloat(f64, m.sample_count) * 100;
@@ -509,28 +509,63 @@ fn printMeasurement(
     try w.writeAll("\n");
 }
 
+fn printNum3SigFigs(w: anytype, num: f64) !void {
+    if (num >= 1000 or @round(num) == num) {
+        try w.print("{d: >4.0}", .{num});
+        // TODO Do we need special handling here since it overruns 3 sig figs?
+    } else if (num >= 100) {
+        try w.print("{d: >4.0}", .{num});
+    } else if (num >= 10) {
+        try w.print("{d: >3.1}", .{num});
+    } else {
+        try w.print("{d: >3.2}", .{num});
+    }
+}
+
 fn printUnit(w: anytype, x: f64, unit: Measurement.Unit, std_dev: f64) !void {
     _ = std_dev; // TODO something useful with this
-    const int = @floatToInt(u64, @round(x));
-    switch (unit) {
-        .count => {
-            try w.print("{d}", .{int});
-        },
-        .nanoseconds => {
-            try w.print("{}", .{std.fmt.fmtDuration(int)});
-        },
-        .bytes => {
-            if (int >= 1000_000_000) {
-                try w.print("{d}G", .{int / 1000_000_000});
-            } else if (int >= 1000_000) {
-                try w.print("{d}M", .{int / 1000_000});
-            } else if (int >= 1000) {
-                try w.print("{d}K", .{int / 1000});
-            } else {
-                try w.print("{d}B", .{int});
-            }
-        },
+    const num = x;
+    var val: f64 = 0;
+    var color: []const u8 = progress.EscapeCodes.dim ++ progress.EscapeCodes.white;
+    var ustr: []const u8 = "  ";
+    if (num >= 1000_000_000_000) {
+        val = num / 1000_000_000_000;
+        ustr = switch (unit) {
+            .count => "T ",
+            .nanoseconds => "ks",
+            .bytes => "TB",
+        };
+    } else if (num >= 1000_000_000) {
+        val = num / 1000_000_000;
+        ustr = switch (unit) {
+            .count => "G ",
+            .nanoseconds => "s ",
+            .bytes => "GB",
+        };
+    } else if (num >= 1000_000) {
+        val = num / 1000_000;
+        ustr = switch (unit) {
+            .count => "M ",
+            .nanoseconds => "ms",
+            .bytes => "MB",
+        };
+    } else if (num >= 1000) {
+        val = num / 1000;
+        ustr = switch (unit) {
+            .count => "K ",
+            .nanoseconds => "us",
+            .bytes => "KB",
+        };
+    } else {
+        val = num;
+        ustr = switch (unit) {
+            .count => "  ",
+            .nanoseconds => "ns",
+            .bytes => "  ",
+        };
     }
+    try printNum3SigFigs(w, val);
+    try w.print("{s}{s}{s}", .{ color, ustr, progress.EscapeCodes.reset });
 }
 
 // Gets either the T or Z score for 95% confidence.

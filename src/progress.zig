@@ -40,10 +40,14 @@ pub fn getScreenWidth(stdout: std.os.fd_t) usize {
     return @intCast(usize, winsize.ws_col);
 }
 
-const EscapeCodes = struct {
+pub const EscapeCodes = struct {
     pub const dim = "\x1b[2m";
     pub const pink = "\x1b[38;5;205m";
     pub const white = "\x1b[37m";
+    pub const red = "\x1b[31m";
+    pub const yellow = "\x1b[33m";
+    pub const green = "\x1b[32m";
+    pub const magenta = "\x1b[35m";
     pub const cyan = "\x1b[36m";
     pub const reset = "\x1b[0m";
     pub const erase_line = "\x1b[2K\r";
