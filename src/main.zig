@@ -109,7 +109,7 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--duration")) {
             arg_i += 1;
             if (arg_i >= args.len) {
-                std.debug.print("'{s}' requires an additional argument.\n{s}", .{ arg, usage_text });
+                std.debug.print("'{s}' requires a duration in milliseconds.\n{s}", .{ arg, usage_text });
                 std.process.exit(1);
             }
             const next = args[arg_i];
@@ -123,7 +123,7 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, arg, "--color")) {
             arg_i += 1;
             if (arg_i >= args.len) {
-                std.debug.print("'{s}' requires an additional argument.\n{s}", .{ arg, usage_text });
+                std.debug.print("'{s}' requires a mode; options are 'auto', 'never', and 'ansi'.\n{s}", .{ arg, usage_text });
                 std.process.exit(1);
             }
             const next = args[arg_i];
