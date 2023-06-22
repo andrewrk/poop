@@ -13,6 +13,8 @@ const usage_text =
     \\
     \\Options:
     \\ -d, --duration <ms>    (default: 5000) how long to repeatedly sample each command
+    \\ --color <when>         (default: auto) color output mode
+    \\                            available options: 'auto', 'never', 'ansi'
     \\
 ;
 
@@ -68,6 +70,12 @@ const Sample = struct {
     }
 };
 
+const ColorMode = enum {
+    auto,
+    never,
+    ansi,
+};
+
 pub fn main() !void {
     var arena_instance = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena_instance.deinit();
@@ -75,15 +83,13 @@ pub fn main() !void {
 
     const args = try std.process.argsAlloc(arena);
 
-    const tty_conf = std.io.tty.detectConfig(std.io.getStdErr());
-    const stderr = std.io.getStdErr();
-    const stderr_w = stderr.writer();
     const stdout = std.io.getStdOut();
     var stdout_bw = std.io.bufferedWriter(stdout.writer());
     const stdout_w = stdout_bw.writer();
 
     var commands = std.ArrayList(Command).init(arena);
     var max_nano_seconds: u64 = std.time.ns_per_s * 5;
+    var color: ColorMode = .auto;
 
     var arg_i: usize = 1;
     while (arg_i < args.len) : (arg_i += 1) {
@@ -103,7 +109,7 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--duration")) {
             arg_i += 1;
             if (arg_i >= args.len) {
-                std.debug.print("'{s}' requires an additional argument.\n{s}", .{ arg, usage_text });
+                std.debug.print("'{s}' requires a duration in milliseconds.\n{s}", .{ arg, usage_text });
                 std.process.exit(1);
             }
             const next = args[arg_i];
@@ -114,6 +120,24 @@ pub fn main() !void {
                 std.process.exit(1);
             };
             max_nano_seconds = std.time.ns_per_ms * max_ms;
+        } else if (std.mem.eql(u8, arg, "--color")) {
+            arg_i += 1;
+            if (arg_i >= args.len) {
+                std.debug.print("'{s}' requires a mode; options are 'auto', 'never', and 'ansi'.\n{s}", .{ arg, usage_text });
+                std.process.exit(1);
+            }
+            const next = args[arg_i];
+            if (std.meta.stringToEnum(ColorMode, next)) |when| {
+                color = when;
+            } else {
+                std.debug.print(
+                    \\unable to parse --color argument '{s}'
+                    \\
+                    \\available options are 'auto', 'never' and 'ansi'
+                    \\
+                , .{next});
+                std.process.exit(1);
+            }
         } else {
             std.debug.print("unrecognized argument: '{s}'\n{s}", .{ arg, usage_text });
             std.process.exit(1);
@@ -127,6 +151,12 @@ pub fn main() !void {
 
     var bar = try progress.ProgressBar.init(arena, stdout);
     defer bar.deinit();
+
+    const tty_conf: std.io.tty.Config = switch (color) {
+        .auto => std.io.tty.detectConfig(stdout),
+        .never => .no_color,
+        .ansi => .escape_codes,
+    };
 
     var perf_fds = [1]fd_t{-1} ** perf_measurements.len;
     var samples_buf: [MAX_SAMPLES]Sample = undefined;
@@ -301,7 +331,6 @@ pub fn main() !void {
         }
     }
 
-    _ = stderr_w;
     try stdout_bw.flush(); // 💩
 }
 
