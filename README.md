@@ -22,12 +22,23 @@ Options:
 ```
 
 ## Building from Source
+`poop` is build using [Zig-0.11](https://ziglang.org/). With Zig 0.11 installed,
+building is as simple as running `zig build` in the root directory of the
+repository. The resulting binary will be located in `zig-out/bin/poop`.
+
+Most Linux distributions
+still ship with Zig 0.10 or even Zig 0.9, so you may download the latest version of
+Zig from the [Zig website](https://ziglang.org/download/). Most likely you'll
+need the linux-x86_64 xz tarball for your system, that comes with a pre-built
+`zig` binary. In order to install it, you can simply extract the tarball using
+`xz --decompress` and adding the resulting directory to your `PATH` environment.
+Further information can be found [here](https://ziglang.org/learn/getting-started/#direct-download).
+
+Zig has a very fast release cycle, and development of `poop` is tightly coupled
+to the development of Zig. Hence, it's possible that updating `poop` may require
+updating Zig as well. 
 
 Tested with [Zig](https://ziglang.org/) `0.11.0-dev.3771+128fd7dd0`.
-
-```
-zig build
-```
 
 ## Comparison with Hyperfine
 
