@@ -301,7 +301,7 @@ pub fn main() !void {
                 const cur_samples: u64 = sample_index + 1;
                 const ns_per_sample = (timer.read() - first_start) / cur_samples;
                 const estimate = std.math.divCeil(u64, max_nano_seconds, ns_per_sample) catch unreachable;
-                break :est_total @intCast(usize, @min(MAX_SAMPLES, @max(cur_samples, estimate, min_samples)));
+                break :est_total @intCast(@min(MAX_SAMPLES, @max(cur_samples, estimate, min_samples)));
             };
             bar.current += 1;
         }
@@ -432,15 +432,15 @@ const Measurement = struct {
             if (v < min) min = v;
             if (v > max) max = v;
         }
-        const mean = @floatFromInt(f64, total) / @floatFromInt(f64, samples.len);
+        const mean = @as(f64, @floatFromInt(total)) / @as(f64, @floatFromInt(samples.len));
         var std_dev: f64 = 0;
         for (samples) |s| {
             const v = @field(s, field);
-            const delta = @floatFromInt(f64, v) - mean;
+            const delta: f64 = @as(f64, @floatFromInt(v)) - mean;
             std_dev += delta * delta;
         }
         if (samples.len > 1) {
-            std_dev /= @floatFromInt(f64, samples.len - 1);
+            std_dev /= @floatFromInt(samples.len - 1);
             std_dev = @sqrt(std_dev);
         }
 
@@ -448,11 +448,11 @@ const Measurement = struct {
         const q3 = if (samples.len < 4) @field(samples[samples.len - 1], field) else @field(samples[samples.len - samples.len / 4], field);
         // Tukey's Fences outliers
         var outlier_count: u64 = 0;
-        const iqr = @floatFromInt(f64, q3 - q1);
-        const low_fence = @floatFromInt(f64, q1) - 1.5 * iqr;
-        const high_fence = @floatFromInt(f64, q3) + 1.5 * iqr;
+        const iqr: f64 = @floatFromInt(q3 - q1);
+        const low_fence = @as(f64, @floatFromInt(q1)) - 1.5 * iqr;
+        const high_fence = @as(f64, @floatFromInt(q3)) + 1.5 * iqr;
         for (samples) |s| {
-            const v = @floatFromInt(f64, @field(s, field));
+            const v: f64 = @floatFromInt(@field(s, field));
             if (v < low_fence or v > high_fence) outlier_count += 1;
         }
         return .{
@@ -504,14 +504,14 @@ fn printMeasurement(
     count = 0;
 
     try tty_conf.setColor(w, .cyan);
-    try printUnit(fbs.writer(), @floatFromInt(f64, m.min), m.unit, m.std_dev);
+    try printUnit(fbs.writer(), @floatFromInt(m.min), m.unit, m.std_dev);
     try w.writeAll(fbs.getWritten());
     count += fbs.pos;
     fbs.pos = 0;
     try tty_conf.setColor(w, .reset);
     try w.writeAll(" … ");
     try tty_conf.setColor(w, .magenta);
-    try printUnit(fbs.writer(), @floatFromInt(f64, m.max), m.unit, m.std_dev);
+    try printUnit(fbs.writer(), @floatFromInt(m.max), m.unit, m.std_dev);
     try w.writeAll(fbs.getWritten());
     count += fbs.pos;
     fbs.pos = 0;
@@ -520,7 +520,7 @@ fn printMeasurement(
     try w.writeByteNTimes(' ', 46 - (count + 1));
     count = 0;
 
-    const outlier_percent = @floatFromInt(f64, m.outlier_count) / @floatFromInt(f64, m.sample_count) * 100;
+    const outlier_percent = @as(f64, @floatFromInt(m.outlier_count)) / @as(f64, @floatFromInt(m.sample_count)) * 100;
     if (outlier_percent >= 10)
         try tty_conf.setColor(w, .yellow)
     else
@@ -538,8 +538,8 @@ fn printMeasurement(
         if (first_m) |f| {
             const half = blk: {
                 const z = getStatScore95(m.sample_count + f.sample_count - 2);
-                const n1 = @floatFromInt(f64, m.sample_count);
-                const n2 = @floatFromInt(f64, f.sample_count);
+                const n1: f64 = @floatFromInt(m.sample_count);
+                const n2: f64 = @floatFromInt(f.sample_count);
                 const normer = std.math.sqrt(1.0 / n1 + 1.0 / n2);
                 const numer1 = (n1 - 1) * (m.std_dev * m.std_dev);
                 const numer2 = (n2 - 1) * (f.std_dev * f.std_dev);
@@ -655,7 +655,7 @@ fn printUnit(w: anytype, x: f64, unit: Measurement.Unit, std_dev: f64) !void {
 // If no `df` variable is provided, Z score is provided.
 pub fn getStatScore95(df: ?u64) f64 {
     if (df) |dff| {
-        const dfv = @intCast(usize, dff);
+        const dfv: usize = @intCast(dff);
         if (dfv <= 30) {
             return t_table95_1to30[dfv - 1];
         } else if (dfv <= 120) {
