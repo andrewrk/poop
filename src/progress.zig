@@ -37,7 +37,7 @@ const Winsize = extern struct {
 pub fn getScreenWidth(stdout: std.os.fd_t) usize {
     var winsize: Winsize = undefined;
     _ = std.os.linux.ioctl(stdout, TIOCGWINSZ, @intFromPtr(&winsize));
-    return @intCast(usize, winsize.ws_col);
+    return @intCast(winsize.ws_col);
 }
 
 pub const EscapeCodes = struct {
@@ -95,7 +95,7 @@ pub const ProgressBar = struct {
         var writer = self.buf.writer();
         const bar_width = width - Spinner.frame1.len - " 10000 runs ".len - " 100% ".len;
         const prog_len = (bar_width * 2) * self.current / self.estimate;
-        const full_bars_len = @intCast(usize, prog_len / 2);
+        const full_bars_len: usize = @intCast(prog_len / 2);
 
         try writer.print("{s}{s}{s} {d: >5} runs ", .{ EscapeCodes.cyan, self.spinner.get(), EscapeCodes.reset, self.current });
         self.spinner.next();
@@ -115,7 +115,9 @@ pub const ProgressBar = struct {
             try writer.print(bar, .{});
         }
         try writer.print("{s}", .{EscapeCodes.reset}); // reset
-        try writer.print(" {d: >3.0}% ", .{@floatFromInt(f64, self.current) * 100 / @floatFromInt(f64, self.estimate)});
+        try writer.print(" {d: >3.0}% ", .{
+            @as(f64, @floatFromInt(self.current)) * 100 / @as(f64, @floatFromInt(self.estimate)),
+        });
         try self.stdout.writeAll(self.buf.items[0..self.buf.items.len]);
     }
 
