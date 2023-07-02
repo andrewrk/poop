@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("std");
 
 const Spinner = struct {
@@ -35,9 +36,20 @@ const Winsize = extern struct {
 };
 
 pub fn getScreenWidth(stdout: std.os.fd_t) usize {
-    var winsize: Winsize = undefined;
-    _ = std.os.linux.ioctl(stdout, TIOCGWINSZ, @intFromPtr(&winsize));
-    return @intCast(winsize.ws_col);
+    switch (builtin.os.tag) {
+        .windows => {
+            var info: std.os.windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
+            if (std.os.windows.kernel32.GetConsoleScreenBufferInfo(stdout, &info) != std.os.windows.TRUE) {
+                return 80;
+            }
+            return @intCast(info.dwSize.X);
+        },
+        else => {
+            var winsize: Winsize = undefined;
+            _ = std.os.linux.ioctl(stdout, TIOCGWINSZ, @intFromPtr(&winsize));
+            return @intCast(winsize.ws_col);
+        },
+    }
 }
 
 pub const EscapeCodes = struct {
