@@ -33,7 +33,7 @@ pub fn build(b: *std.Build) void {
         });
         rel_exe.strip = true;
 
-        const install = b.addInstallArtifact(rel_exe);
+        const install = b.addInstallArtifact(rel_exe, .{});
         install.dest_dir = .prefix;
         install.dest_sub_path = b.fmt("{s}-{s}", .{ target_string, rel_exe.name });
 
