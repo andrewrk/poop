@@ -150,7 +150,6 @@ pub fn main() !void {
     }
 
     var bar = try progress.ProgressBar.init(arena, stdout);
-    defer bar.deinit();
 
     const tty_conf: std.io.tty.Config = switch (color) {
         .auto => std.io.tty.detectConfig(stdout),
@@ -186,7 +185,7 @@ pub fn main() !void {
             (timer.read() - first_start) < max_nano_seconds) and
             sample_index < samples_buf.len) : (sample_index += 1)
         {
-            try bar.render();
+            if (tty_conf != .no_color) try bar.render();
             for (perf_measurements, &perf_fds) |measurement, *perf_fd| {
                 var attr: std.os.linux.perf_event_attr = .{
                     .type = PERF.TYPE.HARDWARE,
@@ -249,7 +248,8 @@ pub fn main() !void {
             switch (term) {
                 .Exited => |code| {
                     if (code != 0) {
-                        bar.clear() catch {};
+                        if (tty_conf != .no_color)
+                            bar.clear() catch {};
                         std.debug.print("\nerror: Benchmark {d} command '{s}' failed with exit code {d}:\n", .{
                             command_n,
                             command.raw_cmd,
@@ -297,19 +297,23 @@ pub fn main() !void {
                 perf_fd.* = -1;
             }
 
-            bar.estimate = est_total: {
-                const cur_samples: u64 = sample_index + 1;
-                const ns_per_sample = (timer.read() - first_start) / cur_samples;
-                const estimate = std.math.divCeil(u64, max_nano_seconds, ns_per_sample) catch unreachable;
-                break :est_total @intCast(@min(MAX_SAMPLES, @max(cur_samples, estimate, min_samples)));
-            };
-            bar.current += 1;
+            if (tty_conf != .no_color) {
+                bar.estimate = est_total: {
+                    const cur_samples: u64 = sample_index + 1;
+                    const ns_per_sample = (timer.read() - first_start) / cur_samples;
+                    const estimate = std.math.divCeil(u64, max_nano_seconds, ns_per_sample) catch unreachable;
+                    break :est_total @intCast(@min(MAX_SAMPLES, @max(cur_samples, estimate, min_samples)));
+                };
+                bar.current += 1;
+            }
         }
 
-        // reset bar for next command
-        try bar.clear();
-        bar.current = 0;
-        bar.estimate = 1;
+        if (tty_conf != .no_color) {
+            // reset bar for next command
+            try bar.clear();
+            bar.current = 0;
+            bar.estimate = 1;
+        }
 
         const all_samples = samples_buf[0..sample_index];
 
@@ -484,17 +488,18 @@ fn printMeasurement(
     var fbs = std.io.fixedBufferStream(&buf);
     var count: usize = 0;
 
+    const color_enabled = tty_conf != .no_color;
     const spaces = 32 - ("  (mean  ):".len + name.len + 2);
     try w.writeByteNTimes(' ', spaces);
     try tty_conf.setColor(w, .bright_green);
-    try printUnit(fbs.writer(), m.mean, m.unit, m.std_dev);
+    try printUnit(fbs.writer(), m.mean, m.unit, m.std_dev, color_enabled);
     try w.writeAll(fbs.getWritten());
     count += fbs.pos;
     fbs.pos = 0;
     try tty_conf.setColor(w, .reset);
     try w.writeAll(" ± ");
     try tty_conf.setColor(w, .green);
-    try printUnit(fbs.writer(), m.std_dev, m.unit, 0);
+    try printUnit(fbs.writer(), m.std_dev, m.unit, 0, color_enabled);
     try w.writeAll(fbs.getWritten());
     count += fbs.pos;
     fbs.pos = 0;
@@ -504,14 +509,14 @@ fn printMeasurement(
     count = 0;
 
     try tty_conf.setColor(w, .cyan);
-    try printUnit(fbs.writer(), @floatFromInt(m.min), m.unit, m.std_dev);
+    try printUnit(fbs.writer(), @floatFromInt(m.min), m.unit, m.std_dev, color_enabled);
     try w.writeAll(fbs.getWritten());
     count += fbs.pos;
     fbs.pos = 0;
     try tty_conf.setColor(w, .reset);
     try w.writeAll(" … ");
     try tty_conf.setColor(w, .magenta);
-    try printUnit(fbs.writer(), @floatFromInt(m.max), m.unit, m.std_dev);
+    try printUnit(fbs.writer(), @floatFromInt(m.max), m.unit, m.std_dev, color_enabled);
     try w.writeAll(fbs.getWritten());
     count += fbs.pos;
     fbs.pos = 0;
@@ -605,7 +610,7 @@ fn printNum3SigFigs(w: anytype, num: f64) !void {
     }
 }
 
-fn printUnit(w: anytype, x: f64, unit: Measurement.Unit, std_dev: f64) !void {
+fn printUnit(w: anytype, x: f64, unit: Measurement.Unit, std_dev: f64, color_enabled: bool) !void {
     _ = std_dev; // TODO something useful with this
     const num = x;
     var val: f64 = 0;
@@ -648,7 +653,11 @@ fn printUnit(w: anytype, x: f64, unit: Measurement.Unit, std_dev: f64) !void {
         };
     }
     try printNum3SigFigs(w, val);
-    try w.print("{s}{s}{s}", .{ color, ustr, progress.EscapeCodes.reset });
+    if (color_enabled) {
+        try w.print("{s}{s}{s}", .{ color, ustr, progress.EscapeCodes.reset });
+    } else {
+        try w.writeAll(ustr);
+    }
 }
 
 // Gets either the T or Z score for 95% confidence.
