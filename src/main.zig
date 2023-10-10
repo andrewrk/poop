@@ -583,7 +583,7 @@ fn printMeasurement(
                 }
                 try w.writeAll("-");
             }
-            try fbs.writer().print("{d: >5.1}% ± {d: >4.1}%", .{ @fabs(diff_mean_percent), half });
+            try fbs.writer().print("{d: >5.1}% ± {d: >4.1}%", .{ @abs(diff_mean_percent), half });
             try w.writeAll(fbs.getWritten());
             count += fbs.pos;
             fbs.pos = 0;
