@@ -614,7 +614,7 @@ fn printUnit(w: anytype, x: f64, unit: Measurement.Unit, std_dev: f64, color_ena
     _ = std_dev; // TODO something useful with this
     const num = x;
     var val: f64 = 0;
-    var color: []const u8 = progress.EscapeCodes.dim ++ progress.EscapeCodes.white;
+    const color: []const u8 = progress.EscapeCodes.dim ++ progress.EscapeCodes.white;
     var ustr: []const u8 = "  ";
     if (num >= 1000_000_000_000) {
         val = num / 1000_000_000_000;
