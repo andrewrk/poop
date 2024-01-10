@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("std");
 const PERF = std.os.linux.PERF;
 const fd_t = std.os.fd_t;
@@ -18,17 +19,22 @@ const usage_text =
     \\
 ;
 
+const has_perf = builtin.os.tag == .linux;
+
 const PerfMeasurement = struct {
     name: []const u8,
     config: PERF.COUNT.HW,
 };
 
-const perf_measurements = [_]PerfMeasurement{
-    .{ .name = "cpu_cycles", .config = PERF.COUNT.HW.CPU_CYCLES },
-    .{ .name = "instructions", .config = PERF.COUNT.HW.INSTRUCTIONS },
-    .{ .name = "cache_references", .config = PERF.COUNT.HW.CACHE_REFERENCES },
-    .{ .name = "cache_misses", .config = PERF.COUNT.HW.CACHE_MISSES },
-    .{ .name = "branch_misses", .config = PERF.COUNT.HW.BRANCH_MISSES },
+const perf_measurements = switch (has_perf) {
+    true => [_]PerfMeasurement{
+        .{ .name = "cpu_cycles", .config = PERF.COUNT.HW.CPU_CYCLES },
+        .{ .name = "instructions", .config = PERF.COUNT.HW.INSTRUCTIONS },
+        .{ .name = "cache_references", .config = PERF.COUNT.HW.CACHE_REFERENCES },
+        .{ .name = "cache_misses", .config = PERF.COUNT.HW.CACHE_MISSES },
+        .{ .name = "branch_misses", .config = PERF.COUNT.HW.BRANCH_MISSES },
+    },
+    false => [_]PerfMeasurement{},
 };
 
 const Command = struct {
@@ -40,22 +46,83 @@ const Command = struct {
     const Measurements = struct {
         wall_time: Measurement,
         peak_rss: Measurement,
-        cpu_cycles: Measurement,
-        instructions: Measurement,
-        cache_references: Measurement,
-        cache_misses: Measurement,
-        branch_misses: Measurement,
+        perf: switch (has_perf) {
+            true => struct {
+                cpu_cycles: Measurement,
+                instructions: Measurement,
+                cache_references: Measurement,
+                cache_misses: Measurement,
+                branch_misses: Measurement,
+            },
+            false => void,
+        },
+
+        pub fn get(self: Measurements, comptime field: []const u8) Measurement {
+            if (!@hasField(Measurements, field)) {
+                return @field(self.perf, field);
+            }
+            return @field(self, field);
+        }
+
+        fn numFields() usize {
+            var num: usize = 0;
+            inline for (@typeInfo(Measurements).Struct.fields) |field| {
+                if (std.mem.eql(u8, field.name, "perf")) {
+                    if (@typeInfo(field.type) == .Struct) {
+                        inline for (@typeInfo(field.type).Struct.fields) |_| {
+                            num += 1;
+                        }
+                    }
+                    continue;
+                }
+                num += 1;
+            }
+            return num;
+        }
+
+        pub fn fieldNames() *const [numFields()][]const u8 {
+            return comptime blk: {
+                var names: [numFields()][]const u8 = undefined;
+                var i = 0;
+                inline for (@typeInfo(Measurements).Struct.fields) |field| {
+                    if (std.mem.eql(u8, field.name, "perf")) {
+                        if (@typeInfo(field.type) == .Struct) {
+                            inline for (@typeInfo(field.type).Struct.fields) |perf_field| {
+                                names[i] = perf_field.name;
+                                i += 1;
+                            }
+                        }
+                        continue;
+                    }
+                    names[i] = field.name;
+                    i += 1;
+                }
+                break :blk &names;
+            };
+        }
     };
 };
 
 const Sample = struct {
     wall_time: u64,
-    cpu_cycles: u64,
-    instructions: u64,
-    cache_references: u64,
-    cache_misses: u64,
-    branch_misses: u64,
     peak_rss: u64,
+    perf: switch (has_perf) {
+        true => struct {
+            cpu_cycles: u64,
+            instructions: u64,
+            cache_references: u64,
+            cache_misses: u64,
+            branch_misses: u64,
+        },
+        false => void,
+    },
+
+    pub fn get(self: Sample, comptime field: []const u8) u64 {
+        if (!@hasField(Sample, field)) {
+            return @field(self.perf, field);
+        }
+        return @field(self, field);
+    }
 
     pub fn lessThanContext(comptime field: []const u8) type {
         return struct {
@@ -64,7 +131,7 @@ const Sample = struct {
                 lhs: Sample,
                 rhs: Sample,
             ) bool {
-                return @field(lhs, field) < @field(rhs, field);
+                return lhs.get(field) < rhs.get(field);
             }
         };
     }
@@ -77,6 +144,11 @@ const ColorMode = enum {
 };
 
 pub fn main() !void {
+    // Set codepage to UTF-8 to ensure that everything renders correctly on Windows
+    if (builtin.os.tag == .windows) {
+        _ = std.os.windows.kernel32.SetConsoleOutputCP(65001);
+    }
+
     var arena_instance = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena_instance.deinit();
     const arena = arena_instance.allocator();
@@ -157,7 +229,10 @@ pub fn main() !void {
         .ansi => .escape_codes,
     };
 
-    var perf_fds = [1]fd_t{-1} ** perf_measurements.len;
+    var perf_fds = switch (has_perf) {
+        true => [1]fd_t{-1} ** perf_measurements.len,
+        false => [_]fd_t{},
+    };
     var samples_buf: [MAX_SAMPLES]Sample = undefined;
 
     var stderr_buffer: [4096]u8 = undefined;
@@ -186,25 +261,27 @@ pub fn main() !void {
             sample_index < samples_buf.len) : (sample_index += 1)
         {
             if (tty_conf != .no_color) try bar.render();
-            for (perf_measurements, &perf_fds) |measurement, *perf_fd| {
-                var attr: std.os.linux.perf_event_attr = .{
-                    .type = PERF.TYPE.HARDWARE,
-                    .config = @intFromEnum(measurement.config),
-                    .flags = .{
-                        .disabled = true,
-                        .exclude_kernel = true,
-                        .exclude_hv = true,
-                        .inherit = true,
-                        .enable_on_exec = true,
-                    },
-                };
-                perf_fd.* = std.os.perf_event_open(&attr, 0, -1, perf_fds[0], PERF.FLAG.FD_CLOEXEC) catch |err| {
-                    std.debug.panic("unable to open perf event: {s}\n", .{@errorName(err)});
-                };
-            }
+            if (has_perf) {
+                for (perf_measurements, &perf_fds) |measurement, *perf_fd| {
+                    var attr: std.os.linux.perf_event_attr = .{
+                        .type = PERF.TYPE.HARDWARE,
+                        .config = @intFromEnum(measurement.config),
+                        .flags = .{
+                            .disabled = true,
+                            .exclude_kernel = true,
+                            .exclude_hv = true,
+                            .inherit = true,
+                            .enable_on_exec = true,
+                        },
+                    };
+                    perf_fd.* = std.os.perf_event_open(&attr, 0, -1, perf_fds[0], PERF.FLAG.FD_CLOEXEC) catch |err| {
+                        std.debug.panic("unable to open perf event: {s}\n", .{@errorName(err)});
+                    };
+                }
 
-            _ = std.os.linux.ioctl(perf_fds[0], PERF.EVENT_IOC.DISABLE, PERF.IOC_FLAG_GROUP);
-            _ = std.os.linux.ioctl(perf_fds[0], PERF.EVENT_IOC.RESET, PERF.IOC_FLAG_GROUP);
+                _ = std.os.linux.ioctl(perf_fds[0], PERF.EVENT_IOC.DISABLE, PERF.IOC_FLAG_GROUP);
+                _ = std.os.linux.ioctl(perf_fds[0], PERF.EVENT_IOC.RESET, PERF.IOC_FLAG_GROUP);
+            }
 
             var child = std.process.Child.init(command.argv, arena);
 
@@ -242,7 +319,9 @@ pub fn main() !void {
 
             const term = try child.wait();
             const end = timer.read();
-            _ = std.os.linux.ioctl(perf_fds[0], PERF.EVENT_IOC.DISABLE, PERF.IOC_FLAG_GROUP);
+            if (has_perf) {
+                _ = std.os.linux.ioctl(perf_fds[0], PERF.EVENT_IOC.DISABLE, PERF.IOC_FLAG_GROUP);
+            }
             const peak_rss = child.resource_usage_statistics.getMaxRss() orelse 0;
 
             switch (term) {
@@ -286,15 +365,22 @@ pub fn main() !void {
             samples_buf[sample_index] = .{
                 .wall_time = end - start,
                 .peak_rss = peak_rss,
-                .cpu_cycles = readPerfFd(perf_fds[0]),
-                .instructions = readPerfFd(perf_fds[1]),
-                .cache_references = readPerfFd(perf_fds[2]),
-                .cache_misses = readPerfFd(perf_fds[3]),
-                .branch_misses = readPerfFd(perf_fds[4]),
+                .perf = switch (has_perf) {
+                    true => .{
+                        .cpu_cycles = readPerfFd(perf_fds[0]),
+                        .instructions = readPerfFd(perf_fds[1]),
+                        .cache_references = readPerfFd(perf_fds[2]),
+                        .cache_misses = readPerfFd(perf_fds[3]),
+                        .branch_misses = readPerfFd(perf_fds[4]),
+                    },
+                    false => {},
+                },
             };
-            for (&perf_fds) |*perf_fd| {
-                std.os.close(perf_fd.*);
-                perf_fd.* = -1;
+            if (has_perf) {
+                for (&perf_fds) |*perf_fd| {
+                    std.os.close(perf_fd.*);
+                    perf_fd.* = -1;
+                }
             }
 
             if (tty_conf != .no_color) {
@@ -320,11 +406,16 @@ pub fn main() !void {
         command.measurements = .{
             .wall_time = Measurement.compute(all_samples, "wall_time", .nanoseconds),
             .peak_rss = Measurement.compute(all_samples, "peak_rss", .bytes),
-            .cpu_cycles = Measurement.compute(all_samples, "cpu_cycles", .count),
-            .instructions = Measurement.compute(all_samples, "instructions", .count),
-            .cache_references = Measurement.compute(all_samples, "cache_references", .count),
-            .cache_misses = Measurement.compute(all_samples, "cache_misses", .count),
-            .branch_misses = Measurement.compute(all_samples, "branch_misses", .count),
+            .perf = switch (has_perf) {
+                true => .{
+                    .cpu_cycles = Measurement.compute(all_samples, "cpu_cycles", .count),
+                    .instructions = Measurement.compute(all_samples, "instructions", .count),
+                    .cache_references = Measurement.compute(all_samples, "cache_references", .count),
+                    .cache_misses = Measurement.compute(all_samples, "cache_misses", .count),
+                    .branch_misses = Measurement.compute(all_samples, "branch_misses", .count),
+                },
+                false => {},
+            },
         };
         command.sample_count = all_samples.len;
 
@@ -376,13 +467,13 @@ pub fn main() !void {
 
             try stdout_w.writeAll("\n");
 
-            inline for (@typeInfo(Command.Measurements).Struct.fields) |field| {
-                const measurement = @field(command.measurements, field.name);
+            inline for (comptime Command.Measurements.fieldNames()) |field_name| {
+                const measurement = command.measurements.get(field_name);
                 const first_measurement = if (command_n == 1)
                     null
                 else
-                    @field(commands.items[0].measurements, field.name);
-                try printMeasurement(tty_conf, stdout_w, measurement, field.name, first_measurement, commands.items.len);
+                    commands.items[0].measurements.get(field_name);
+                try printMeasurement(tty_conf, stdout_w, measurement, field_name, first_measurement, commands.items.len);
             }
 
             try stdout_bw.flush(); // 💩
@@ -431,7 +522,7 @@ const Measurement = struct {
         var min: u64 = std.math.maxInt(u64);
         var max: u64 = 0;
         for (samples) |s| {
-            const v = @field(s, field);
+            const v = s.get(field);
             total += v;
             if (v < min) min = v;
             if (v > max) max = v;
@@ -439,7 +530,7 @@ const Measurement = struct {
         const mean = @as(f64, @floatFromInt(total)) / @as(f64, @floatFromInt(samples.len));
         var std_dev: f64 = 0;
         for (samples) |s| {
-            const v = @field(s, field);
+            const v = s.get(field);
             const delta: f64 = @as(f64, @floatFromInt(v)) - mean;
             std_dev += delta * delta;
         }
@@ -448,20 +539,20 @@ const Measurement = struct {
             std_dev = @sqrt(std_dev);
         }
 
-        const q1 = @field(samples[samples.len / 4], field);
-        const q3 = if (samples.len < 4) @field(samples[samples.len - 1], field) else @field(samples[samples.len - samples.len / 4], field);
+        const q1 = samples[samples.len / 4].get(field);
+        const q3 = if (samples.len < 4) samples[samples.len - 1].get(field) else samples[samples.len - samples.len / 4].get(field);
         // Tukey's Fences outliers
         var outlier_count: u64 = 0;
         const iqr: f64 = @floatFromInt(q3 - q1);
         const low_fence = @as(f64, @floatFromInt(q1)) - 1.5 * iqr;
         const high_fence = @as(f64, @floatFromInt(q3)) + 1.5 * iqr;
         for (samples) |s| {
-            const v: f64 = @floatFromInt(@field(s, field));
+            const v: f64 = @floatFromInt(s.get(field));
             if (v < low_fence or v > high_fence) outlier_count += 1;
         }
         return .{
             .q1 = q1,
-            .median = @field(samples[samples.len / 2], field),
+            .median = samples[samples.len / 2].get(field),
             .q3 = q3,
             .mean = mean,
             .min = min,
