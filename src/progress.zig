@@ -34,7 +34,7 @@ const Winsize = extern struct {
     ws_ypixel: c_ushort,
 };
 
-pub fn getScreenWidth(stdout: std.os.fd_t) usize {
+pub fn getScreenWidth(stdout: std.posix.fd_t) usize {
     var winsize: Winsize = undefined;
     _ = std.os.linux.ioctl(stdout, TIOCGWINSZ, @intFromPtr(&winsize));
     return @intCast(winsize.ws_col);
