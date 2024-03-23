@@ -1,6 +1,6 @@
 const std = @import("std");
 const PERF = std.os.linux.PERF;
-const fd_t = std.os.fd_t;
+const fd_t = std.posix.fd_t;
 const pid_t = std.os.pid_t;
 const assert = std.debug.assert;
 const progress = @import("./progress.zig");
@@ -198,7 +198,7 @@ pub fn main() !void {
                         .enable_on_exec = true,
                     },
                 };
-                perf_fd.* = std.os.perf_event_open(&attr, 0, -1, perf_fds[0], PERF.FLAG.FD_CLOEXEC) catch |err| {
+                perf_fd.* = std.posix.perf_event_open(&attr, 0, -1, perf_fds[0], PERF.FLAG.FD_CLOEXEC) catch |err| {
                     std.debug.panic("unable to open perf event: {s}\n", .{@errorName(err)});
                 };
             }
@@ -293,7 +293,7 @@ pub fn main() !void {
                 .branch_misses = readPerfFd(perf_fds[4]),
             };
             for (&perf_fds) |*perf_fd| {
-                std.os.close(perf_fd.*);
+                std.posix.close(perf_fd.*);
                 perf_fd.* = -1;
             }
 
@@ -399,7 +399,7 @@ fn parseCmd(list: *std.ArrayList([]const u8), cmd: []const u8) !void {
 
 fn readPerfFd(fd: fd_t) usize {
     var result: usize = 0;
-    const n = std.os.read(fd, std.mem.asBytes(&result)) catch |err| {
+    const n = std.posix.read(fd, std.mem.asBytes(&result)) catch |err| {
         std.debug.panic("unable to read perf fd: {s}\n", .{@errorName(err)});
     };
     assert(n == @sizeOf(usize));
