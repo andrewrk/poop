@@ -6,7 +6,7 @@ pub fn build(b: *std.Build) void {
 
     const exe = b.addExecutable(.{
         .name = "poop",
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
         .strip = b.option(bool, "strip", "strip the binary"),
@@ -38,7 +38,7 @@ pub fn build(b: *std.Build) void {
         const t = resolved_target.result;
         const rel_exe = b.addExecutable(.{
             .name = "poop",
-            .root_source_file = .{ .path = "src/main.zig" },
+            .root_source_file = b.path("src/main.zig"),
             .target = resolved_target,
             .optimize = .ReleaseSafe,
             .strip = true,
