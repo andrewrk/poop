@@ -244,7 +244,10 @@ pub fn main() !void {
                 }
             }
 
-            const term = try child.wait();
+            const term = child.wait() catch |err| {
+                std.debug.print("\nerror: Couldn't execute {s}: {s}\n", .{ command.argv[0], @errorName(err) });
+                std.process.exit(1);
+            };
             const end = timer.read();
             _ = std.os.linux.ioctl(perf_fds[0], PERF.EVENT_IOC.DISABLE, PERF.IOC_FLAG_GROUP);
             const peak_rss = child.resource_usage_statistics.getMaxRss() orelse 0;
