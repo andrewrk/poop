@@ -12,13 +12,8 @@ jobs:
         target: [ x86-linux, x86_64-linux, aarch64-linux, riscv64-linux ]
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout
-      uses: actions/checkout@v2
-
-    - name: Setup Zig
-      uses: goto-bus-stop/setup-zig@v1.3.0
-      with:
-        version: master
+    - uses: actions/checkout@v2
+    - uses: mlugg/setup-zig@v1
 
     - name: Build
       run: zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}
