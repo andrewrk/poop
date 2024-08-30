@@ -39,12 +39,14 @@ However, poop does report peak memory usage as well as 5 other hardware
 counters, which I personally find useful when doing performance testing. Hey,
 maybe it will inspire the Hyperfine maintainers to add the extra data points!
 
-Poop does not run the commands in a shell. This has the upside of not
-including shell spawning noise in the data points collected, and the downside
-of not supporting strings inside the commands.
+Poop does not support running the commands in a shell. This has the upside of
+not including shell spawning noise in the data points collected, and the
+downside of not supporting strings inside the commands. Hyperfine by default
+runs the commands in a shell, with command line options to disable this.
 
-Poop treats the first command as a reference and the subsequent ones
-relative to it, giving the user the choice of the meaning of the coloring of
-the deltas. Hyperfine always prints the wall-clock-fastest command first.
+Poop treats the first command as a reference and the subsequent ones relative
+to it, giving the user the choice of the meaning of the coloring of the deltas.
+Hyperfine by default prints the wall-clock-fastest command first, with a command
+line option to select a different reference command explicitly.
 
 While Hyperfine is cross-platform, Poop is Linux-only.
