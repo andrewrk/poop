@@ -15,6 +15,7 @@ const usage_text =
     \\ -d, --duration <ms>    (default: 5000) how long to repeatedly sample each command
     \\ --color <when>         (default: auto) color output mode
     \\                            available options: 'auto', 'never', 'ansi'
+    \\ -f, --allow-failures   (default: false) compare performance if a non-zero exit code is returned
     \\
 ;
 
@@ -90,6 +91,7 @@ pub fn main() !void {
     var commands = std.ArrayList(Command).init(arena);
     var max_nano_seconds: u64 = std.time.ns_per_s * 5;
     var color: ColorMode = .auto;
+    var allow_failures = false;
 
     var arg_i: usize = 1;
     while (arg_i < args.len) : (arg_i += 1) {
@@ -138,6 +140,8 @@ pub fn main() !void {
                 , .{next});
                 std.process.exit(1);
             }
+        } else if (std.mem.eql(u8, arg, "-f") or std.mem.eql(u8, arg, "--allow-failures")) {
+            allow_failures = true;
         } else {
             std.debug.print("unrecognized argument: '{s}'\n{s}", .{ arg, usage_text });
             std.process.exit(1);
@@ -247,7 +251,7 @@ pub fn main() !void {
 
             switch (term) {
                 .Exited => |code| {
-                    if (code != 0) {
+                    if (code != 0 and !allow_failures) {
                         if (tty_conf != .no_color)
                             bar.clear() catch {};
                         std.debug.print("\nerror: Benchmark {d} command '{s}' failed with exit code {d}:\n", .{
