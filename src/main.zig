@@ -393,8 +393,49 @@ pub fn main() !void {
 }
 
 fn parseCmd(list: *std.ArrayList([]const u8), cmd: []const u8) !void {
-    var it = std.mem.tokenizeScalar(u8, cmd, ' ');
-    while (it.next()) |s| try list.append(s);
+    var i: usize = 0;
+    while (i < cmd.len) {
+        while (i < cmd.len and std.ascii.isWhitespace(cmd[i])) : (i += 1) {}
+        if (i >= cmd.len) break;
+
+        var token = std.ArrayList(u8).init(list.allocator);
+        defer token.deinit();
+
+        var in_single_quote = false;
+        var in_double_quote = false;
+        while (i < cmd.len) {
+            const char = cmd[i];
+            switch (char) {
+                '\\' => {
+                    if (i + 1 < cmd.len) {
+                        try token.append(cmd[i + 1]);
+                        i += 1;
+                    }
+                },
+                '\'' => {
+                    if (!in_double_quote) {
+                        in_single_quote = !in_single_quote;
+                    }
+                },
+                '"' => {
+                    if (!in_single_quote) {
+                        in_double_quote = !in_double_quote;
+                    }
+                },
+                else => {
+                    if (std.ascii.isWhitespace(char) and !in_single_quote and !in_double_quote) {
+                        break;
+                    }
+                    try token.append(char);
+                },
+            }
+            i += 1;
+        }
+
+        if (token.items.len > 0) {
+            try list.append(try list.allocator.dupe(u8, token.items));
+        }
+    }
 }
 
 fn readPerfFd(fd: fd_t) usize {
