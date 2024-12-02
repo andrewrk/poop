@@ -383,7 +383,7 @@ pub fn main() !void {
 
             try stdout_w.writeAll("\n");
 
-            inline for (@typeInfo(Command.Measurements).Struct.fields) |field| {
+            inline for (@typeInfo(Command.Measurements).@"struct".fields) |field| {
                 const measurement = @field(command.measurements, field.name);
                 const first_measurement = if (command_n == 1)
                     null
