@@ -400,8 +400,10 @@ pub fn main() !void {
 }
 
 fn parseCmd(list: *std.ArrayList([]const u8), cmd: []const u8) !void {
-    var it = std.mem.tokenizeScalar(u8, cmd, ' ');
-    while (it.next()) |s| try list.append(s);
+    const shell = std.posix.getenv("SHELL") orelse "/bin/sh";
+    try list.append(shell);
+    try list.append("-c");
+    try list.append(try list.allocator.dupe(u8, cmd));
 }
 
 fn readPerfFd(fd: fd_t) usize {
