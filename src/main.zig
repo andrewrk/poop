@@ -16,6 +16,7 @@ const usage_text =
     \\ --color <when>         (default: auto) color output mode
     \\                            available options: 'auto', 'never', 'ansi'
     \\ -f, --allow-failures   (default: false) compare performance if a non-zero exit code is returned
+    \\ --export-json <path>   export results to a JSON file
     \\
 ;
 
@@ -92,7 +93,7 @@ pub fn main() !void {
     var max_nano_seconds: u64 = std.time.ns_per_s * 5;
     var color: ColorMode = .auto;
     var allow_failures = false;
-
+    var export_json: ?[]const u8 = null;
     var arg_i: usize = 1;
     while (arg_i < args.len) : (arg_i += 1) {
         const arg = args[arg_i];
@@ -142,6 +143,14 @@ pub fn main() !void {
             }
         } else if (std.mem.eql(u8, arg, "-f") or std.mem.eql(u8, arg, "--allow-failures")) {
             allow_failures = true;
+        } else if (std.mem.eql(u8, arg, "--export-json")) {
+            arg_i += 1;
+            if (arg_i >= args.len) {
+                std.debug.print("'{s}' requires a path.\n{s}", .{ arg, usage_text });
+                std.process.exit(1);
+            }
+            const next = args[arg_i];
+            export_json = next;
         } else {
             std.debug.print("unrecognized argument: '{s}'\n{s}", .{ arg, usage_text });
             std.process.exit(1);
@@ -397,6 +406,11 @@ pub fn main() !void {
     }
 
     try stdout_bw.flush(); // 💩
+
+    if (export_json) |path| {
+        const serialized = try std.json.stringifyAlloc(arena, commands.items, .{});
+        try std.fs.cwd().writeFile(.{ .sub_path = path, .data = serialized });
+    }
 }
 
 fn parseCmd(list: *std.ArrayList([]const u8), cmd: []const u8) !void {
