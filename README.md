@@ -4,8 +4,7 @@ Stop flushing your performance down the drain.
 
 ## Overview
 
-This command line tool uses Linux's `perf_event_open` functionality to compare the performance of multiple commands
-with a colorful terminal user interface.
+This command line tool uses Linux's `perf` / Darwin's `kperf` functionality to compare the performance of multiple commands with a colorful terminal user interface.
 
 ![image](https://github.com/andrewrk/poop/assets/106511/6fc9d22b-f95b-46ce-8dc5-d5cecc77c226)
 
@@ -22,8 +21,6 @@ Options:
 ```
 
 ## Building from Source
-
-Tested with [Zig](https://ziglang.org/) `0.11.0-dev.3883+7166407d8`.
 
 ```
 zig build

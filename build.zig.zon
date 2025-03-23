@@ -1,0 +1,21 @@
+.{
+    .name = .poop,
+    .version = "0.2.0",
+    .fingerprint = 0xbb90f5c9c7a9a787, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.14.0",
+    .dependencies = .{
+        .scoop = .{
+            .url = "git+https://codeberg.org/tensorush/scoop.git#a10ec7fa96510069c2fd6f85e0eb1790c5d7e288",
+            .hash = "scoop-0.3.0-lhAxpyHUAAAPZIz5GDPHjdPMttNO87KefT7i9Mk5AWm7",
+            .lazy = true,
+        },
+    },
+    .paths = .{
+        "src/",
+        "examples/",
+        "build.zig",
+        "build.zig.zon",
+        "LICENSE",
+        "README.md",
+    },
+}
