@@ -1,27 +1,43 @@
-name: ci
+name: CI
+
 on:
-  pull_request:
   push:
-    branches:
-      - main
+    branches: [main]
+
+  pull_request:
+    branches: [main]
+
 jobs:
-  build:
+  exe:
     strategy:
-      fail-fast: false
       matrix:
-        target: [ x86-linux, x86_64-linux, aarch64-linux, riscv64-linux ]
-    runs-on: ubuntu-latest
+        os: [ubuntu-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
+
     steps:
-    - uses: actions/checkout@v2
-    - uses: mlugg/setup-zig@v1
-      with:
-        version: master
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-    - name: Build
-      run: zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.14.0
 
-    - name: Archive executable
-      uses: actions/upload-artifact@v3
-      with:
-        name: poop
-        path: zig-out/bin/*
+      - name: Run exe step
+        run: sudo zig build exe -- 'zig build-exe examples/hello.zig' 'zig build-exe -O ReleaseFast examples/hello.zig'
+
+  fmt:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.14.0
+
+      - name: Run fmt step
+        run: zig build fmt

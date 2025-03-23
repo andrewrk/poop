@@ -1,10 +1,23 @@
 const std = @import("std");
-const PERF = std.os.linux.PERF;
-const fd_t = std.posix.fd_t;
+const builtin = @import("builtin");
+
+const native_os = builtin.os.tag;
+const is_darwin = native_os.isDarwin();
+
+const system = switch (native_os) {
+    .linux => undefined,
+    .macos => @import("scoop"),
+    else => unreachable,
+};
+
+const progress = @import("progress.zig");
+
 const pid_t = std.os.pid_t;
+const fd_t = std.posix.fd_t;
+const PERF = std.os.linux.PERF;
 const assert = std.debug.assert;
-const progress = @import("./progress.zig");
-const MAX_SAMPLES = 10000;
+
+const MAX_SAMPLES = 10_000;
 
 const usage_text =
     \\Usage: poop [options] <command1> ... <commandN>
@@ -30,6 +43,14 @@ const perf_measurements = [_]PerfMeasurement{
     .{ .name = "cache_references", .config = PERF.COUNT.HW.CACHE_REFERENCES },
     .{ .name = "cache_misses", .config = PERF.COUNT.HW.CACHE_MISSES },
     .{ .name = "branch_misses", .config = PERF.COUNT.HW.BRANCH_MISSES },
+};
+
+const CounterAlias = enum {
+    Cycles,
+    Instructions,
+    DataCacheMisses,
+    InstructionCacheMisses,
+    BranchMisses,
 };
 
 const Command = struct {
@@ -161,8 +182,14 @@ pub fn main() !void {
         .ansi => .escape_codes,
     };
 
-    var perf_fds = [1]fd_t{-1} ** perf_measurements.len;
+    // perf (Linux)
+    var perf_fds: [perf_measurements.len]fd_t = @splat(-1);
     var samples_buf: [MAX_SAMPLES]Sample = undefined;
+
+    // kperf (Darwin)
+    var counters = std.EnumArray(CounterAlias, u64).initUndefined();
+    const KperfTrace = if (is_darwin) system.Trace(CounterAlias) else void;
+    var kperf_trace: KperfTrace = undefined;
 
     var stderr_buffer: [4096]u8 = undefined;
     var stderr_fba = std.heap.FixedBufferAllocator.init(&stderr_buffer);
@@ -190,25 +217,31 @@ pub fn main() !void {
             sample_index < samples_buf.len) : (sample_index += 1)
         {
             if (tty_conf != .no_color) try bar.render();
-            for (perf_measurements, &perf_fds) |measurement, *perf_fd| {
-                var attr: std.os.linux.perf_event_attr = .{
-                    .type = PERF.TYPE.HARDWARE,
-                    .config = @intFromEnum(measurement.config),
-                    .flags = .{
-                        .disabled = true,
-                        .exclude_kernel = true,
-                        .exclude_hv = true,
-                        .inherit = true,
-                        .enable_on_exec = true,
-                    },
-                };
-                perf_fd.* = std.posix.perf_event_open(&attr, 0, -1, perf_fds[0], PERF.FLAG.FD_CLOEXEC) catch |err| {
-                    std.debug.panic("unable to open perf event: {s}\n", .{@errorName(err)});
-                };
-            }
 
-            _ = std.os.linux.ioctl(perf_fds[0], PERF.EVENT_IOC.DISABLE, PERF.IOC_FLAG_GROUP);
-            _ = std.os.linux.ioctl(perf_fds[0], PERF.EVENT_IOC.RESET, PERF.IOC_FLAG_GROUP);
+            switch (native_os) {
+                .linux => {
+                    for (perf_measurements, &perf_fds) |measurement, *perf_fd| {
+                        var attr: std.os.linux.perf_event_attr = .{
+                            .type = PERF.TYPE.HARDWARE,
+                            .config = @intFromEnum(measurement.config),
+                            .flags = .{
+                                .disabled = true,
+                                .exclude_kernel = true,
+                                .exclude_hv = true,
+                                .inherit = true,
+                                .enable_on_exec = true,
+                            },
+                        };
+                        perf_fd.* = std.posix.perf_event_open(&attr, 0, -1, perf_fds[0], PERF.FLAG.FD_CLOEXEC) catch |err| {
+                            std.debug.panic("unable to open perf event: {s}\n", .{@errorName(err)});
+                        };
+                    }
+                    _ = std.os.linux.ioctl(perf_fds[0], PERF.EVENT_IOC.DISABLE, PERF.IOC_FLAG_GROUP);
+                    _ = std.os.linux.ioctl(perf_fds[0], PERF.EVENT_IOC.RESET, PERF.IOC_FLAG_GROUP);
+                },
+                .macos => kperf_trace = try KperfTrace.startSampling(arena, &counters, .{ .target_pid = std.c.getpid(), .is_gpa = false }),
+                else => unreachable,
+            }
 
             var child = std.process.Child.init(command.argv, arena);
 
@@ -249,7 +282,13 @@ pub fn main() !void {
                 std.process.exit(1);
             };
             const end = timer.read();
-            _ = std.os.linux.ioctl(perf_fds[0], PERF.EVENT_IOC.DISABLE, PERF.IOC_FLAG_GROUP);
+
+            switch (native_os) {
+                .linux => _ = std.os.linux.ioctl(perf_fds[0], PERF.EVENT_IOC.DISABLE, PERF.IOC_FLAG_GROUP),
+                .macos => try kperf_trace.stopSampling(),
+                else => unreachable,
+            }
+
             const peak_rss = child.resource_usage_statistics.getMaxRss() orelse 0;
 
             switch (term) {
@@ -290,18 +329,33 @@ pub fn main() !void {
                 },
             }
 
-            samples_buf[sample_index] = .{
-                .wall_time = end - start,
-                .peak_rss = peak_rss,
-                .cpu_cycles = readPerfFd(perf_fds[0]),
-                .instructions = readPerfFd(perf_fds[1]),
-                .cache_references = readPerfFd(perf_fds[2]),
-                .cache_misses = readPerfFd(perf_fds[3]),
-                .branch_misses = readPerfFd(perf_fds[4]),
+            samples_buf[sample_index] = switch (native_os) {
+                .linux => .{
+                    .wall_time = end - start,
+                    .peak_rss = peak_rss,
+                    .cpu_cycles = readPerfFd(perf_fds[0]),
+                    .instructions = readPerfFd(perf_fds[1]),
+                    .cache_references = readPerfFd(perf_fds[2]),
+                    .cache_misses = readPerfFd(perf_fds[3]),
+                    .branch_misses = readPerfFd(perf_fds[4]),
+                },
+                .macos => .{
+                    .wall_time = end - start,
+                    .peak_rss = peak_rss,
+                    .cpu_cycles = counters.get(.Cycles),
+                    .instructions = counters.get(.Instructions),
+                    .cache_references = 0,
+                    .cache_misses = counters.get(.DataCacheMisses) + counters.get(.InstructionCacheMisses),
+                    .branch_misses = counters.get(.BranchMisses),
+                },
+                else => unreachable,
             };
-            for (&perf_fds) |*perf_fd| {
-                std.posix.close(perf_fd.*);
-                perf_fd.* = -1;
+
+            if (native_os == .linux) {
+                for (&perf_fds) |*perf_fd| {
+                    std.posix.close(perf_fd.*);
+                    perf_fd.* = -1;
+                }
             }
 
             if (tty_conf != .no_color) {
@@ -385,10 +439,7 @@ pub fn main() !void {
 
             inline for (@typeInfo(Command.Measurements).@"struct".fields) |field| {
                 const measurement = @field(command.measurements, field.name);
-                const first_measurement = if (command_n == 1)
-                    null
-                else
-                    @field(commands.items[0].measurements, field.name);
+                const first_measurement = if (command_n == 1) null else @field(commands.items[0].measurements, field.name);
                 try printMeasurement(tty_conf, stdout_w, measurement, field.name, first_measurement, commands.items.len);
             }
 
@@ -489,6 +540,8 @@ fn printMeasurement(
     first_m: ?Measurement,
     command_count: usize,
 ) !void {
+    if (m.max == 0) return;
+
     try w.print("  {s}", .{name});
 
     var buf: [200]u8 = undefined;

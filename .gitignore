@@ -1,2 +1,6 @@
+# Zig artifacts
 .zig-cache/
-/zig-out/
+zig-out/
+
+# Project artifacts
+/hello*
