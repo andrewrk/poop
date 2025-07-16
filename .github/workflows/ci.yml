@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
-    - uses: mlugg/setup-zig@v1
+    - uses: mlugg/setup-zig@v2
       with:
         version: master
 
@@ -21,7 +21,7 @@ jobs:
       run: zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}
 
     - name: Archive executable
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: poop
         path: zig-out/bin/*
