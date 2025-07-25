@@ -60,7 +60,7 @@ pub fn build(b: *std.Build) void {
 
 const builtin = @import("builtin");
 comptime { // check current Zig version is compatible
-    const min: std.SemanticVersion = .{ .major = 0, .minor = 15, .patch = 0 }; // .pre and .build default to null
+    const min: std.SemanticVersion = .{ .major = 0, .minor = 15, .patch = 0, .pre = "dev" }; // .pre and .build default to null
     const max: std.SemanticVersion = .{ .major = 0, .minor = 15, .patch = 0 };
     const current = builtin.zig_version;
     if (current.order(min) == .lt) {
