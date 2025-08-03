@@ -5,6 +5,7 @@ const pid_t = std.os.pid_t;
 const assert = std.debug.assert;
 const progress = @import("./progress.zig");
 const MAX_SAMPLES = 10000;
+const stderr_buf_size = 4096;
 
 const usage_text =
     \\Usage: poop [options] <command1> ... <commandN>
@@ -76,6 +77,26 @@ const ColorMode = enum {
     never,
     ansi,
 };
+
+fn bufferChildStderr(fifo: *std.fifo.LinearFifo(u8, .Slice), stderr_file: std.fs.File) !bool {
+    var truncated = false;
+    var temp_buf: [stderr_buf_size]u8 = undefined;
+
+    while (true) {
+        const writable = fifo.writableSlice(stderr_buf_size);
+        if (writable.len == 0) {
+            truncated = true;
+            break;
+        }
+
+        const bytes_read = try stderr_file.read(writable);
+        if (bytes_read == 0) break;
+
+        fifo.writeAssumeCapacity(temp_buf[0..bytes_read]);
+    }
+
+    return truncated;
+}
 
 pub fn main() !void {
     var arena_instance = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -166,7 +187,7 @@ pub fn main() !void {
     var perf_fds = [1]fd_t{-1} ** perf_measurements.len;
     var samples_buf: [MAX_SAMPLES]Sample = undefined;
 
-    var stderr_buffer: [4096]u8 = undefined;
+    var stderr_buffer: [stderr_buf_size]u8 = undefined;
     var stderr_fba = std.heap.FixedBufferAllocator.init(&stderr_buffer);
 
     var timer = std.time.Timer.start() catch @panic("need timer to work");
@@ -222,21 +243,14 @@ pub fn main() !void {
             const start = timer.read();
             try child.spawn();
 
-            var poller = std.io.poll(stderr_fba.allocator(), enum { stderr }, .{ .stderr = child.stderr.? });
-            defer poller.deinit();
+            const stderr_file = child.stderr.?;
+            const fifo_buf = try stderr_fba.allocator().alloc(u8, 4096);
+            defer stderr_fba.allocator().free(fifo_buf);
+            var fifo = std.fifo.LinearFifo(u8, .Slice).init(fifo_buf);
 
-            const child_stderr = poller.fifo(.stderr);
-            var stderr_truncated = false;
+            const truncated = try bufferChildStderr(&fifo, stderr_file);
 
-            while (true) {
-                const keep_polling = poller.poll() catch {
-                    stderr_truncated = true;
-                    break;
-                };
-                if (!keep_polling) break;
-            }
-
-            if (stderr_truncated) {
+            if (truncated) {
                 // continue reading to consume all stderr to prevent deadlocking
                 var overflow_buffer: [4096]u8 = undefined;
 
@@ -264,14 +278,15 @@ pub fn main() !void {
                             command.raw_cmd,
                             code,
                         });
-                        if (stderr_truncated) {
+                        const readable = fifo.readableSlice(0);
+                        if (truncated) {
                             std.debug.print(
                                 \\────────────── truncated stderr ──────────────
                                 \\{s}
                                 \\──────────────────────────────────────────────
                                 \\
                             ,
-                                .{child_stderr.buf[child_stderr.head..][0..child_stderr.count]},
+                                .{readable},
                             );
                         } else {
                             std.debug.print(
@@ -280,7 +295,7 @@ pub fn main() !void {
                                 \\──────────────────────────────────────────────
                                 \\
                             ,
-                                .{child_stderr.buf[child_stderr.head..][0..child_stderr.count]},
+                                .{readable},
                             );
                         }
                         std.process.exit(1);
