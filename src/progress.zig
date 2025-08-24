@@ -1,22 +1,21 @@
 const std = @import("std");
 
 const Spinner = struct {
-    const Self = @This();
     pub const frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
     pub const frame1 = "⠋";
     pub const frame_count = frames.len / frame1.len;
 
     frame_idx: usize,
 
-    pub fn init() Self {
-        return Self{ .frame_idx = 0 };
+    pub fn init() Spinner {
+        return .{ .frame_idx = 0 };
     }
 
-    pub fn get(self: *const Self) []const u8 {
+    pub fn get(self: *const Spinner) []const u8 {
         return frames[self.frame_idx * frame1.len ..][0..frame1.len];
     }
 
-    pub fn next(self: *Self) void {
+    pub fn next(self: *Spinner) void {
         self.frame_idx = (self.frame_idx + 1) % frame_count;
     }
 };
@@ -54,8 +53,6 @@ pub const EscapeCodes = struct {
 };
 
 pub const ProgressBar = struct {
-    const Self = @This();
-
     spinner: Spinner,
     current: u64,
     estimate: u64,
@@ -63,12 +60,12 @@ pub const ProgressBar = struct {
     buf: std.ArrayList(u8),
     last_rendered: std.time.Instant,
 
-    pub fn init(allocator: std.mem.Allocator, stdout: std.fs.File) !Self {
+    pub fn init(allocator: std.mem.Allocator, stdout: std.fs.File) !ProgressBar {
         const width = getScreenWidth(stdout.handle);
-        const buf = try std.ArrayList(u8).initCapacity(allocator, width + WIDTH_PADDING);
-        return Self{
-            .spinner = Spinner.init(),
-            .last_rendered = try std.time.Instant.now(),
+        const buf: std.ArrayList(u8) = try .initCapacity(allocator, width + WIDTH_PADDING);
+        return .{
+            .spinner = .init(),
+            .last_rendered = try .now(),
             .current = 0,
             .estimate = 1,
             .stdout = stdout,
@@ -76,13 +73,13 @@ pub const ProgressBar = struct {
         };
     }
 
-    pub fn deinit(self: *Self) void {
-        self.buf.deinit();
+    pub fn deinit(self: *ProgressBar, allocator: std.mem.Allocator) void {
+        self.buf.deinit(allocator);
     }
 
     /// Clears then renders bar if enough time has passed since last render.
-    pub fn render(self: *Self) !void {
-        const now = try std.time.Instant.now();
+    pub fn render(self: *ProgressBar, allocator: std.mem.Allocator) !void {
+        const now: std.time.Instant = try .now();
         if (now.since(self.last_rendered) < 50 * std.time.ns_per_ms) {
             return;
         }
@@ -90,9 +87,9 @@ pub const ProgressBar = struct {
         self.last_rendered = now;
         const width = getScreenWidth(self.stdout.handle);
         if (width + WIDTH_PADDING > self.buf.capacity) {
-            try self.buf.resize(width + WIDTH_PADDING);
+            try self.buf.resize(allocator, width + WIDTH_PADDING);
         }
-        var writer = self.buf.writer();
+        var writer = self.buf.writer(allocator);
         const bar_width = width - Spinner.frame1.len - " 10000 runs ".len - " 100% ".len;
         const prog_len = (bar_width * 2) * self.current / self.estimate;
         const full_bars_len: usize = @intCast(prog_len / 2);
@@ -121,7 +118,7 @@ pub const ProgressBar = struct {
         try self.stdout.writeAll(self.buf.items[0..self.buf.items.len]);
     }
 
-    pub fn clear(self: *Self) !void {
+    pub fn clear(self: *ProgressBar) !void {
         try self.stdout.writeAll(EscapeCodes.erase_line); // clear and reset line
         self.buf.clearRetainingCapacity();
     }

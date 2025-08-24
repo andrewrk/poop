@@ -3,7 +3,7 @@ const PERF = std.os.linux.PERF;
 const fd_t = std.posix.fd_t;
 const pid_t = std.os.pid_t;
 const assert = std.debug.assert;
-const progress = @import("./progress.zig");
+const progress = @import("progress.zig");
 const MAX_SAMPLES = 10000;
 
 const usage_text =
@@ -78,7 +78,7 @@ const ColorMode = enum {
 };
 
 pub fn main() !void {
-    var arena_instance = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var arena_instance: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
     defer arena_instance.deinit();
     const arena = arena_instance.allocator();
 
@@ -88,7 +88,7 @@ pub fn main() !void {
     var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
     const stdout_w = &stdout_writer.interface;
 
-    var commands = std.ArrayList(Command).init(arena);
+    var commands: std.ArrayList(Command) = .empty;
     var max_nano_seconds: u64 = std.time.ns_per_s * 5;
     var color: ColorMode = .auto;
     var allow_failures = false;
@@ -97,11 +97,11 @@ pub fn main() !void {
     while (arg_i < args.len) : (arg_i += 1) {
         const arg = args[arg_i];
         if (!std.mem.startsWith(u8, arg, "-")) {
-            var cmd_argv = std.ArrayList([]const u8).init(arena);
-            try parseCmd(&cmd_argv, arg);
-            try commands.append(.{
+            var cmd_argv: std.ArrayList([]const u8) = .empty;
+            try parseCmd(arena, &cmd_argv, arg);
+            try commands.append(arena, .{
                 .raw_cmd = arg,
-                .argv = try cmd_argv.toOwnedSlice(),
+                .argv = try cmd_argv.toOwnedSlice(arena),
                 .measurements = undefined,
                 .sample_count = undefined,
             });
@@ -117,8 +117,8 @@ pub fn main() !void {
             }
             const next = args[arg_i];
             const max_ms = std.fmt.parseInt(u64, next, 10) catch |err| {
-                std.debug.print("unable to parse --duration argument '{s}': {s}\n", .{
-                    next, @errorName(err),
+                std.debug.print("unable to parse --duration argument '{s}': {t}\n", .{
+                    next, err,
                 });
                 std.process.exit(1);
             };
@@ -155,10 +155,10 @@ pub fn main() !void {
         std.process.exit(1);
     }
 
-    var bar = try progress.ProgressBar.init(arena, .stdout());
+    var bar: progress.ProgressBar = try .init(arena, .stdout());
 
-    const tty_conf: std.io.tty.Config = switch (color) {
-        .auto => std.io.tty.detectConfig(.stdout()),
+    const tty_conf: std.Io.tty.Config = switch (color) {
+        .auto => .detect(.stdout()),
         .never => .no_color,
         .ansi => .escape_codes,
     };
@@ -167,7 +167,7 @@ pub fn main() !void {
     var samples_buf: [MAX_SAMPLES]Sample = undefined;
 
     var stderr_buffer: [4096]u8 = undefined;
-    var stderr_fba = std.heap.FixedBufferAllocator.init(&stderr_buffer);
+    var stderr_fba: std.heap.FixedBufferAllocator = .init(&stderr_buffer);
 
     var timer = std.time.Timer.start() catch @panic("need timer to work");
 
@@ -191,7 +191,7 @@ pub fn main() !void {
             (timer.read() - first_start) < max_nano_seconds) and
             sample_index < samples_buf.len) : (sample_index += 1)
         {
-            if (tty_conf != .no_color) try bar.render();
+            if (tty_conf != .no_color) try bar.render(arena);
             for (perf_measurements, &perf_fds) |measurement, *perf_fd| {
                 var attr: std.os.linux.perf_event_attr = .{
                     .type = PERF.TYPE.HARDWARE,
@@ -205,14 +205,14 @@ pub fn main() !void {
                     },
                 };
                 perf_fd.* = std.posix.perf_event_open(&attr, 0, -1, perf_fds[0], PERF.FLAG.FD_CLOEXEC) catch |err| {
-                    std.debug.panic("unable to open perf event: {s}\n", .{@errorName(err)});
+                    std.debug.panic("unable to open perf event: {t}\n", .{err});
                 };
             }
 
             _ = std.os.linux.ioctl(perf_fds[0], PERF.EVENT_IOC.DISABLE, PERF.IOC_FLAG_GROUP);
             _ = std.os.linux.ioctl(perf_fds[0], PERF.EVENT_IOC.RESET, PERF.IOC_FLAG_GROUP);
 
-            var child = std.process.Child.init(command.argv, arena);
+            var child: std.process.Child = .init(command.argv, arena);
 
             child.stdin_behavior = .Ignore;
             child.stdout_behavior = .Ignore;
@@ -222,10 +222,10 @@ pub fn main() !void {
             const start = timer.read();
             try child.spawn();
 
-            var poller = std.io.poll(stderr_fba.allocator(), enum { stderr }, .{ .stderr = child.stderr.? });
+            var poller = std.Io.poll(stderr_fba.allocator(), enum { stderr }, .{ .stderr = child.stderr.? });
             defer poller.deinit();
 
-            const child_stderr = poller.fifo(.stderr);
+            const child_stderr = poller.reader(.stderr);
             var stderr_truncated = false;
 
             while (true) {
@@ -241,13 +241,15 @@ pub fn main() !void {
                 var overflow_buffer: [4096]u8 = undefined;
 
                 while (true) {
-                    const amt = child.stderr.?.read(&overflow_buffer) catch break;
+                    var reader = child.stderr.?.reader(&.{});
+                    const amt = try reader.interface.readSliceShort(&overflow_buffer);
+
                     if (amt == 0) break;
                 }
             }
 
             const term = child.wait() catch |err| {
-                std.debug.print("\nerror: Couldn't execute {s}: {s}\n", .{ command.argv[0], @errorName(err) });
+                std.debug.print("\nerror: Couldn't execute {s}: {t}\n", .{ command.argv[0], err });
                 std.process.exit(1);
             };
             const end = timer.read();
@@ -271,7 +273,7 @@ pub fn main() !void {
                                 \\──────────────────────────────────────────────
                                 \\
                             ,
-                                .{child_stderr.buf[child_stderr.head..][0..child_stderr.count]},
+                                .{child_stderr.buffer[child_stderr.seek..][0..child_stderr.end]},
                             );
                         } else {
                             std.debug.print(
@@ -280,7 +282,7 @@ pub fn main() !void {
                                 \\──────────────────────────────────────────────
                                 \\
                             ,
-                                .{child_stderr.buf[child_stderr.head..][0..child_stderr.count]},
+                                .{child_stderr.buffer[child_stderr.seek..][0..child_stderr.end]},
                             );
                         }
                         std.process.exit(1);
@@ -327,13 +329,13 @@ pub fn main() !void {
         const all_samples = samples_buf[0..sample_index];
 
         command.measurements = .{
-            .wall_time = Measurement.compute(all_samples, "wall_time", .nanoseconds),
-            .peak_rss = Measurement.compute(all_samples, "peak_rss", .bytes),
-            .cpu_cycles = Measurement.compute(all_samples, "cpu_cycles", .count),
-            .instructions = Measurement.compute(all_samples, "instructions", .count),
-            .cache_references = Measurement.compute(all_samples, "cache_references", .count),
-            .cache_misses = Measurement.compute(all_samples, "cache_misses", .count),
-            .branch_misses = Measurement.compute(all_samples, "branch_misses", .count),
+            .wall_time = .compute(all_samples, "wall_time", .nanoseconds),
+            .peak_rss = .compute(all_samples, "peak_rss", .bytes),
+            .cpu_cycles = .compute(all_samples, "cpu_cycles", .count),
+            .instructions = .compute(all_samples, "instructions", .count),
+            .cache_references = .compute(all_samples, "cache_references", .count),
+            .cache_misses = .compute(all_samples, "cache_misses", .count),
+            .branch_misses = .compute(all_samples, "branch_misses", .count),
         };
         command.sample_count = all_samples.len;
 
@@ -401,15 +403,15 @@ pub fn main() !void {
     try stdout_w.flush(); // 💩
 }
 
-fn parseCmd(list: *std.ArrayList([]const u8), cmd: []const u8) !void {
+fn parseCmd(arena: std.mem.Allocator, list: *std.ArrayList([]const u8), cmd: []const u8) !void {
     var it = std.mem.tokenizeScalar(u8, cmd, ' ');
-    while (it.next()) |s| try list.append(s);
+    while (it.next()) |s| try list.append(arena, s);
 }
 
 fn readPerfFd(fd: fd_t) usize {
     var result: usize = 0;
     const n = std.posix.read(fd, std.mem.asBytes(&result)) catch |err| {
-        std.debug.panic("unable to read perf fd: {s}\n", .{@errorName(err)});
+        std.debug.panic("unable to read perf fd: {t}\n", .{err});
     };
     assert(n == @sizeOf(usize));
     return result;
@@ -485,7 +487,7 @@ const Measurement = struct {
 
 fn printMeasurement(
     tty_conf: std.io.tty.Config,
-    w: anytype,
+    w: *std.Io.Writer,
     m: Measurement,
     name: []const u8,
     first_m: ?Measurement,
@@ -494,41 +496,41 @@ fn printMeasurement(
     try w.print("  {s}", .{name});
 
     var buf: [200]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
     var count: usize = 0;
 
     const color_enabled = tty_conf != .no_color;
     const spaces = 32 - ("  (mean  ):".len + name.len + 2);
     try w.splatByteAll(' ', spaces);
     try tty_conf.setColor(w, .bright_green);
-    try printUnit(fbs.writer(), m.mean, m.unit, m.std_dev, color_enabled);
-    try w.writeAll(fbs.getWritten());
-    count += fbs.pos;
-    fbs.pos = 0;
+    try printUnit(&fbs, m.mean, m.unit, m.std_dev, color_enabled);
+    try w.writeAll(fbs.buffered());
+    count += fbs.end;
+    fbs.end = 0;
     try tty_conf.setColor(w, .reset);
     try w.writeAll(" ± ");
     try tty_conf.setColor(w, .green);
-    try printUnit(fbs.writer(), m.std_dev, m.unit, 0, color_enabled);
-    try w.writeAll(fbs.getWritten());
-    count += fbs.pos;
-    fbs.pos = 0;
+    try printUnit(&fbs, m.std_dev, m.unit, 0, color_enabled);
+    try w.writeAll(fbs.buffered());
+    count += fbs.end;
+    fbs.end = 0;
     try tty_conf.setColor(w, .reset);
 
     try w.splatByteAll(' ', 64 - ("  measurement      ".len + count + 3));
     count = 0;
 
     try tty_conf.setColor(w, .cyan);
-    try printUnit(fbs.writer(), @floatFromInt(m.min), m.unit, m.std_dev, color_enabled);
-    try w.writeAll(fbs.getWritten());
-    count += fbs.pos;
-    fbs.pos = 0;
+    try printUnit(&fbs, @floatFromInt(m.min), m.unit, m.std_dev, color_enabled);
+    try w.writeAll(fbs.buffered());
+    count += fbs.end;
+    fbs.end = 0;
     try tty_conf.setColor(w, .reset);
     try w.writeAll(" … ");
     try tty_conf.setColor(w, .magenta);
-    try printUnit(fbs.writer(), @floatFromInt(m.max), m.unit, m.std_dev, color_enabled);
-    try w.writeAll(fbs.getWritten());
-    count += fbs.pos;
-    fbs.pos = 0;
+    try printUnit(&fbs, @floatFromInt(m.max), m.unit, m.std_dev, color_enabled);
+    try w.writeAll(fbs.buffered());
+    count += fbs.end;
+    fbs.end = 0;
     try tty_conf.setColor(w, .reset);
 
     try w.splatByteAll(' ', 46 - (count + 1));
@@ -539,10 +541,10 @@ fn printMeasurement(
         try tty_conf.setColor(w, .yellow)
     else
         try tty_conf.setColor(w, .dim);
-    try fbs.writer().print("{d: >4.0} ({d: >2.0}%)", .{ m.outlier_count, outlier_percent });
-    try w.writeAll(fbs.getWritten());
-    count += fbs.pos;
-    fbs.pos = 0;
+    try fbs.print("{d: >4.0} ({d: >2.0}%)", .{ m.outlier_count, outlier_percent });
+    try w.writeAll(fbs.buffered());
+    count += fbs.end;
+    fbs.end = 0;
     try tty_conf.setColor(w, .reset);
 
     try w.splatByteAll(' ', 19 - (count + 1));
@@ -592,10 +594,10 @@ fn printMeasurement(
                 }
                 try w.writeAll("-");
             }
-            try fbs.writer().print("{d: >5.1}% ± {d: >4.1}%", .{ @abs(diff_mean_percent), half });
-            try w.writeAll(fbs.getWritten());
-            count += fbs.pos;
-            fbs.pos = 0;
+            try fbs.print("{d: >5.1}% ± {d: >4.1}%", .{ @abs(diff_mean_percent), half });
+            try w.writeAll(fbs.buffered());
+            count += fbs.end;
+            fbs.end = 0;
         } else {
             try tty_conf.setColor(w, .dim);
             try w.writeAll("0%");
@@ -606,7 +608,7 @@ fn printMeasurement(
     try w.writeAll("\n");
 }
 
-fn printNum3SigFigs(w: anytype, num: f64) !void {
+fn printNum3SigFigs(w: *std.Io.Writer, num: f64) !void {
     if (num >= 1000 or @round(num) == num) {
         try w.print("{d: >4.0}", .{num});
         // TODO Do we need special handling here since it overruns 3 sig figs?
@@ -619,7 +621,7 @@ fn printNum3SigFigs(w: anytype, num: f64) !void {
     }
 }
 
-fn printUnit(w: anytype, x: f64, unit: Measurement.Unit, std_dev: f64, color_enabled: bool) !void {
+fn printUnit(w: *std.Io.Writer, x: f64, unit: Measurement.Unit, std_dev: f64, color_enabled: bool) !void {
     _ = std_dev; // TODO something useful with this
     const num = x;
     var val: f64 = 0;
