@@ -84,9 +84,9 @@ pub fn main() !void {
 
     const args = try std.process.argsAlloc(arena);
 
-    var stdout_buffer: [1024]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
-    const stdout_w = &stdout_writer.interface;
+    var out = std.io.getStdOut();
+    var stdout_buf = std.io.bufferedWriter(out.writer());
+    const stdout_w = stdout_buf.writer();
 
     var commands = std.ArrayList(Command).init(arena);
     var max_nano_seconds: u64 = std.time.ns_per_s * 5;
@@ -107,7 +107,7 @@ pub fn main() !void {
             });
         } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
             try stdout_w.writeAll(usage_text);
-            try stdout_w.flush(); // 💩
+            try stdout_buf.flush(); // 💩
             return std.process.cleanExit();
         } else if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--duration")) {
             arg_i += 1;
@@ -151,14 +151,14 @@ pub fn main() !void {
 
     if (commands.items.len == 0) {
         try stdout_w.writeAll(usage_text);
-        try stdout_w.flush(); // 💩
+        try stdout_buf.flush(); // 💩
         std.process.exit(1);
     }
 
-    var bar = try progress.ProgressBar.init(arena, .stdout());
+    var bar = try progress.ProgressBar.init(arena, std.io.getStdOut());
 
     const tty_conf: std.io.tty.Config = switch (color) {
-        .auto => std.io.tty.detectConfig(.stdout()),
+        .auto => std.io.tty.detectConfig(std.io.getStdOut()),
         .never => .no_color,
         .ansi => .escape_codes,
     };
@@ -349,7 +349,7 @@ pub fn main() !void {
 
             try tty_conf.setColor(stdout_w, .bold);
             try stdout_w.writeAll("  measurement");
-            try stdout_w.splatByteAll(' ', 23 - "  measurement".len);
+            try stdout_w.writeByteNTimes(' ', 23 - "  measurement".len);
             try tty_conf.setColor(stdout_w, .bright_green);
             try stdout_w.writeAll("mean");
             try tty_conf.setColor(stdout_w, .reset);
@@ -360,7 +360,7 @@ pub fn main() !void {
             try tty_conf.setColor(stdout_w, .reset);
 
             try tty_conf.setColor(stdout_w, .bold);
-            try stdout_w.splatByteAll(' ', 12);
+            try stdout_w.writeByteNTimes(' ', 12);
             try tty_conf.setColor(stdout_w, .cyan);
             try stdout_w.writeAll("min");
             try tty_conf.setColor(stdout_w, .reset);
@@ -371,14 +371,14 @@ pub fn main() !void {
             try tty_conf.setColor(stdout_w, .reset);
 
             try tty_conf.setColor(stdout_w, .bold);
-            try stdout_w.splatByteAll(' ', 20 - " outliers".len);
+            try stdout_w.writeByteNTimes(' ', 20 - " outliers".len);
             try tty_conf.setColor(stdout_w, .bright_yellow);
             try stdout_w.writeAll("outliers");
             try tty_conf.setColor(stdout_w, .reset);
 
             if (commands.items.len >= 2) {
                 try tty_conf.setColor(stdout_w, .bold);
-                try stdout_w.splatByteAll(' ', 9);
+                try stdout_w.writeByteNTimes(' ', 9);
                 try stdout_w.writeAll("delta");
                 try tty_conf.setColor(stdout_w, .reset);
             }
@@ -394,11 +394,11 @@ pub fn main() !void {
                 try printMeasurement(tty_conf, stdout_w, measurement, field.name, first_measurement, commands.items.len);
             }
 
-            try stdout_w.flush(); // 💩
+            try stdout_buf.flush(); // 💩
         }
     }
 
-    try stdout_w.flush(); // 💩
+    try stdout_buf.flush(); // 💩
 }
 
 fn parseCmd(list: *std.ArrayList([]const u8), cmd: []const u8) !void {
@@ -499,7 +499,7 @@ fn printMeasurement(
 
     const color_enabled = tty_conf != .no_color;
     const spaces = 32 - ("  (mean  ):".len + name.len + 2);
-    try w.splatByteAll(' ', spaces);
+    try w.writeByteNTimes(' ', spaces);
     try tty_conf.setColor(w, .bright_green);
     try printUnit(fbs.writer(), m.mean, m.unit, m.std_dev, color_enabled);
     try w.writeAll(fbs.getWritten());
@@ -514,7 +514,7 @@ fn printMeasurement(
     fbs.pos = 0;
     try tty_conf.setColor(w, .reset);
 
-    try w.splatByteAll(' ', 64 - ("  measurement      ".len + count + 3));
+    try w.writeByteNTimes(' ', 64 - ("  measurement      ".len + count + 3));
     count = 0;
 
     try tty_conf.setColor(w, .cyan);
@@ -531,7 +531,7 @@ fn printMeasurement(
     fbs.pos = 0;
     try tty_conf.setColor(w, .reset);
 
-    try w.splatByteAll(' ', 46 - (count + 1));
+    try w.writeByteNTimes(' ', 46 - (count + 1));
     count = 0;
 
     const outlier_percent = @as(f64, @floatFromInt(m.outlier_count)) / @as(f64, @floatFromInt(m.sample_count)) * 100;
@@ -545,7 +545,7 @@ fn printMeasurement(
     fbs.pos = 0;
     try tty_conf.setColor(w, .reset);
 
-    try w.splatByteAll(' ', 19 - (count + 1));
+    try w.writeByteNTimes(' ', 19 - (count + 1));
 
     // ratio
     if (command_count > 1) {
