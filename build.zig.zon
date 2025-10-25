@@ -1,0 +1,12 @@
+.{
+    .name = .poop,
+    .version = "0.5.0",
+    .fingerprint = 0xbb90f5c9555d2c6c,
+    .minimum_zig_version = "0.15.0",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
