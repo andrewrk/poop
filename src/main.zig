@@ -16,6 +16,7 @@ const usage_text =
     \\ --color <when>         (default: auto) color output mode
     \\                            available options: 'auto', 'never', 'ansi'
     \\ -f, --allow-failures   (default: false) compare performance if a non-zero exit code is returned
+    \\ -w, --warmup           (default: false) runs each command once before mesuring
     \\
 ;
 
@@ -92,6 +93,7 @@ pub fn main() !void {
     var max_nano_seconds: u64 = std.time.ns_per_s * 5;
     var color: ColorMode = .auto;
     var allow_failures = false;
+    var warmup = false;
 
     var arg_i: usize = 1;
     while (arg_i < args.len) : (arg_i += 1) {
@@ -143,6 +145,8 @@ pub fn main() !void {
             }
         } else if (std.mem.eql(u8, arg, "-f") or std.mem.eql(u8, arg, "--allow-failures")) {
             allow_failures = true;
+        } else if (std.mem.eql(u8, arg, "-w") or std.mem.eql(u8, arg, "--warmup")) {
+            warmup = true;
         } else {
             std.debug.print("unrecognized argument: '{s}'\n{s}", .{ arg, usage_text });
             std.process.exit(1);
@@ -172,6 +176,24 @@ pub fn main() !void {
     var timer = std.time.Timer.start() catch @panic("need timer to work");
 
     for (commands.items, 1..) |*command, command_n| {
+        if (warmup) {
+            if (tty_conf != .no_color) try bar.render();
+
+            var child = std.process.Child.init(command.argv, arena);
+
+            child.stdin_behavior = .Ignore;
+            child.stdout_behavior = .Ignore;
+            child.stderr_behavior = .Ignore;
+            child.request_resource_usage_statistics = false;
+
+            try child.spawn();
+
+            _ = child.wait() catch |err| {
+                std.debug.print("\nerror: Couldn't execute {s}: {s}\n", .{ command.argv[0], @errorName(err) });
+                std.process.exit(1);
+            };
+        }
+
         stderr_fba.reset();
 
         const max_prog_name_len = 50;
