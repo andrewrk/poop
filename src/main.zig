@@ -16,26 +16,93 @@ const usage_text =
     \\ --color <when>         (default: auto) color output mode
     \\                            available options: 'auto', 'never', 'ansi'
     \\ -f, --allow-failures   (default: false) compare performance if a non-zero exit code is returned
+    \\ -s, --simd             (default: false) show SIMD/FP instruction breakdown
     \\
 ;
 
 const PerfMeasurement = struct {
     name: []const u8,
-    config: PERF.COUNT.HW,
+    event_type: PERF.TYPE,
+    config: u64,
 };
 
 const perf_measurements = [_]PerfMeasurement{
-    .{ .name = "cpu_cycles", .config = PERF.COUNT.HW.CPU_CYCLES },
-    .{ .name = "instructions", .config = PERF.COUNT.HW.INSTRUCTIONS },
-    .{ .name = "cache_references", .config = PERF.COUNT.HW.CACHE_REFERENCES },
-    .{ .name = "cache_misses", .config = PERF.COUNT.HW.CACHE_MISSES },
-    .{ .name = "branch_misses", .config = PERF.COUNT.HW.BRANCH_MISSES },
+    .{ .name = "cpu_cycles", .event_type = .HARDWARE, .config = @intFromEnum(PERF.COUNT.HW.CPU_CYCLES) },
+    .{ .name = "instructions", .event_type = .HARDWARE, .config = @intFromEnum(PERF.COUNT.HW.INSTRUCTIONS) },
+    .{ .name = "cache_references", .event_type = .HARDWARE, .config = @intFromEnum(PERF.COUNT.HW.CACHE_REFERENCES) },
+    .{ .name = "cache_misses", .event_type = .HARDWARE, .config = @intFromEnum(PERF.COUNT.HW.CACHE_MISSES) },
+    .{ .name = "branch_misses", .event_type = .HARDWARE, .config = @intFromEnum(PERF.COUNT.HW.BRANCH_MISSES) },
+};
+
+const CpuVendor = enum {
+    intel,
+    amd,
+    unknown,
+
+    fn detect() CpuVendor {
+        const file = std.fs.openFileAbsolute("/proc/cpuinfo", .{}) catch return .unknown;
+        defer file.close();
+
+        var buf: [4096]u8 = undefined;
+        const n = file.read(&buf) catch return .unknown;
+
+        if (std.mem.indexOf(u8, buf[0..n], "GenuineIntel")) |_| {
+            return .intel;
+        }
+        if (std.mem.indexOf(u8, buf[0..n], "AuthenticAMD")) |_| {
+            return .amd;
+        }
+        return .unknown;
+    }
+
+    fn getSimdEvents(self: CpuVendor) []const PerfMeasurement {
+        return switch (self) {
+            // Intel FP_ARITH_INST_RETIRED (event 0xC7) - available on Skylake and later
+            .intel => &[_]PerfMeasurement{
+                .{ .name = "scalar_double", .event_type = .RAW, .config = 0x01C7 },
+                .{ .name = "scalar_single", .event_type = .RAW, .config = 0x02C7 },
+                .{ .name = "128b_packed_double", .event_type = .RAW, .config = 0x04C7 },
+                .{ .name = "128b_packed_single", .event_type = .RAW, .config = 0x08C7 },
+                .{ .name = "256b_packed_double", .event_type = .RAW, .config = 0x10C7 },
+                .{ .name = "256b_packed_single", .event_type = .RAW, .config = 0x20C7 },
+            },
+            // AMD Zen4+ fp_ops_retired_by_width (0x08) and fp_ops_retired_by_type (0x0a)
+            .amd => &[_]PerfMeasurement{
+                .{ .name = "scalar_all", .event_type = .RAW, .config = 0x0F0A },
+                .{ .name = "pack_128", .event_type = .RAW, .config = 0x0808 },
+                .{ .name = "pack_256", .event_type = .RAW, .config = 0x1008 },
+                .{ .name = "pack_512", .event_type = .RAW, .config = 0x2008 },
+                .{ .name = "vector_all", .event_type = .RAW, .config = 0xF00A },
+            },
+            .unknown => &.{},
+        };
+    }
+
+    fn getName(self: CpuVendor) []const u8 {
+        return switch (self) {
+            .intel => "Intel",
+            .amd => "AMD",
+            .unknown => "Unknown",
+        };
+    }
+
+    fn getMaxSimdEventsLen() comptime_int {
+        comptime {
+            var max: usize = 0;
+            for (std.meta.tags(CpuVendor)) |vendor| {
+                const len = vendor.getSimdEvents().len;
+                if (len > max) max = len;
+            }
+            return max;
+        }
+    }
 };
 
 const Command = struct {
     raw_cmd: []const u8,
     argv: []const []const u8,
     measurements: Measurements,
+    simd_measurements: ?[]Measurement,
     sample_count: usize,
 
     const Measurements = struct {
@@ -57,6 +124,7 @@ const Sample = struct {
     cache_misses: u64,
     branch_misses: u64,
     peak_rss: u64,
+    simd: [CpuVendor.getMaxSimdEventsLen()]u64 = @splat(0),
 
     pub fn lessThanContext(comptime field: []const u8) type {
         return struct {
@@ -92,6 +160,7 @@ pub fn main() !void {
     var max_nano_seconds: u64 = std.time.ns_per_s * 5;
     var color: ColorMode = .auto;
     var allow_failures = false;
+    var simd = false;
 
     var arg_i: usize = 1;
     while (arg_i < args.len) : (arg_i += 1) {
@@ -103,6 +172,7 @@ pub fn main() !void {
                 .raw_cmd = arg,
                 .argv = try cmd_argv.toOwnedSlice(arena),
                 .measurements = undefined,
+                .simd_measurements = null,
                 .sample_count = undefined,
             });
         } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
@@ -143,6 +213,8 @@ pub fn main() !void {
             }
         } else if (std.mem.eql(u8, arg, "-f") or std.mem.eql(u8, arg, "--allow-failures")) {
             allow_failures = true;
+        } else if (std.mem.eql(u8, arg, "-s") or std.mem.eql(u8, arg, "--simd")) {
+            simd = true;
         } else {
             std.debug.print("unrecognized argument: '{s}'\n{s}", .{ arg, usage_text });
             std.process.exit(1);
@@ -163,13 +235,17 @@ pub fn main() !void {
         .ansi => .escape_codes,
     };
 
-    var perf_fds = [1]fd_t{-1} ** perf_measurements.len;
+    var perf_fds = [1]fd_t{-1} ** (perf_measurements.len + CpuVendor.getMaxSimdEventsLen());
     var samples_buf: [MAX_SAMPLES]Sample = undefined;
+    var values_buf: [MAX_SAMPLES]u64 = undefined;
 
     var stderr_buffer: [4096]u8 = undefined;
     var stderr_fba: std.heap.FixedBufferAllocator = .init(&stderr_buffer);
 
     var timer = std.time.Timer.start() catch @panic("need timer to work");
+
+    const cpu_vendor = CpuVendor.detect();
+    const simd_events = cpu_vendor.getSimdEvents();
 
     for (commands.items, 1..) |*command, command_n| {
         stderr_fba.reset();
@@ -192,10 +268,10 @@ pub fn main() !void {
             sample_index < samples_buf.len) : (sample_index += 1)
         {
             if (tty_conf != .no_color) try bar.render(arena);
-            for (perf_measurements, &perf_fds) |measurement, *perf_fd| {
+            for (perf_measurements, 0..) |measurement, i| {
                 var attr: std.os.linux.perf_event_attr = .{
-                    .type = PERF.TYPE.HARDWARE,
-                    .config = @intFromEnum(measurement.config),
+                    .type = measurement.event_type,
+                    .config = measurement.config,
                     .flags = .{
                         .disabled = true,
                         .exclude_kernel = true,
@@ -204,13 +280,45 @@ pub fn main() !void {
                         .enable_on_exec = true,
                     },
                 };
-                perf_fd.* = std.posix.perf_event_open(&attr, 0, -1, perf_fds[0], PERF.FLAG.FD_CLOEXEC) catch |err| {
+                perf_fds[i] = std.posix.perf_event_open(&attr, 0, -1, perf_fds[0], PERF.FLAG.FD_CLOEXEC) catch |err| {
                     std.debug.panic("unable to open perf event: {t}\n", .{err});
                 };
+            }
+            if (simd) {
+                for (simd_events, 0..) |measurement, i| {
+                    var attr: std.os.linux.perf_event_attr = .{
+                        .type = measurement.event_type,
+                        .config = measurement.config,
+                        .flags = .{
+                            .disabled = true,
+                            .exclude_kernel = true,
+                            .exclude_hv = true,
+                            .inherit = true,
+                            .enable_on_exec = true,
+                        },
+                    };
+                    const idx = perf_measurements.len + i;
+                    const group_fd: fd_t = if (i == 0) -1 else perf_fds[perf_measurements.len];
+                    perf_fds[idx] = std.posix.perf_event_open(&attr, 0, -1, group_fd, PERF.FLAG.FD_CLOEXEC) catch |err| {
+                        std.debug.print("warning: SIMD events not supported ({t}), disabling simd output\n", .{err});
+                        for (perf_fds[perf_measurements.len..idx]) |*fd| {
+                            if (fd.* != -1) {
+                                std.posix.close(fd.*);
+                                fd.* = -1;
+                            }
+                        }
+                        simd = false;
+                        break;
+                    };
+                }
             }
 
             _ = std.os.linux.ioctl(perf_fds[0], PERF.EVENT_IOC.DISABLE, PERF.IOC_FLAG_GROUP);
             _ = std.os.linux.ioctl(perf_fds[0], PERF.EVENT_IOC.RESET, PERF.IOC_FLAG_GROUP);
+            if (simd) {
+                _ = std.os.linux.ioctl(perf_fds[perf_measurements.len], PERF.EVENT_IOC.DISABLE, PERF.IOC_FLAG_GROUP);
+                _ = std.os.linux.ioctl(perf_fds[perf_measurements.len], PERF.EVENT_IOC.RESET, PERF.IOC_FLAG_GROUP);
+            }
 
             var child: std.process.Child = .init(command.argv, arena);
 
@@ -254,6 +362,9 @@ pub fn main() !void {
             };
             const end = timer.read();
             _ = std.os.linux.ioctl(perf_fds[0], PERF.EVENT_IOC.DISABLE, PERF.IOC_FLAG_GROUP);
+            if (simd) {
+                _ = std.os.linux.ioctl(perf_fds[perf_measurements.len], PERF.EVENT_IOC.DISABLE, PERF.IOC_FLAG_GROUP);
+            }
             const peak_rss = child.resource_usage_statistics.getMaxRss() orelse 0;
 
             switch (term) {
@@ -294,7 +405,7 @@ pub fn main() !void {
                 },
             }
 
-            samples_buf[sample_index] = .{
+            var sample: Sample = .{
                 .wall_time = end - start,
                 .peak_rss = peak_rss,
                 .cpu_cycles = readPerfFd(perf_fds[0]),
@@ -303,7 +414,14 @@ pub fn main() !void {
                 .cache_misses = readPerfFd(perf_fds[3]),
                 .branch_misses = readPerfFd(perf_fds[4]),
             };
-            for (&perf_fds) |*perf_fd| {
+            if (simd) {
+                for (0..simd_events.len) |i| {
+                    sample.simd[i] = readPerfFd(perf_fds[perf_measurements.len + i]);
+                }
+            }
+            samples_buf[sample_index] = sample;
+            const fds_to_close = perf_measurements.len + if (simd) simd_events.len else 0;
+            for (perf_fds[0..fds_to_close]) |*perf_fd| {
                 std.posix.close(perf_fd.*);
                 perf_fd.* = -1;
             }
@@ -329,14 +447,21 @@ pub fn main() !void {
         const all_samples = samples_buf[0..sample_index];
 
         command.measurements = .{
-            .wall_time = .compute(all_samples, "wall_time", .nanoseconds),
-            .peak_rss = .compute(all_samples, "peak_rss", .bytes),
-            .cpu_cycles = .compute(all_samples, "cpu_cycles", .count),
-            .instructions = .compute(all_samples, "instructions", .count),
-            .cache_references = .compute(all_samples, "cache_references", .count),
-            .cache_misses = .compute(all_samples, "cache_misses", .count),
-            .branch_misses = .compute(all_samples, "branch_misses", .count),
+            .wall_time = .compute(all_samples, "wall_time", .nanoseconds, &values_buf),
+            .peak_rss = .compute(all_samples, "peak_rss", .bytes, &values_buf),
+            .cpu_cycles = .compute(all_samples, "cpu_cycles", .count, &values_buf),
+            .instructions = .compute(all_samples, "instructions", .count, &values_buf),
+            .cache_references = .compute(all_samples, "cache_references", .count, &values_buf),
+            .cache_misses = .compute(all_samples, "cache_misses", .count, &values_buf),
+            .branch_misses = .compute(all_samples, "branch_misses", .count, &values_buf),
         };
+        command.simd_measurements = if (simd) blk: {
+            const simd_m = try arena.alloc(Measurement, simd_events.len);
+            for (0..simd_events.len) |i| {
+                simd_m[i] = Measurement.computeSimd(all_samples, i, &values_buf);
+            }
+            break :blk simd_m;
+        } else null;
         command.sample_count = all_samples.len;
 
         {
@@ -396,6 +521,18 @@ pub fn main() !void {
                 try printMeasurement(tty_conf, stdout_w, measurement, field.name, first_measurement, commands.items.len);
             }
 
+            if (command.simd_measurements) |m| {
+                try tty_conf.setColor(stdout_w, .dim);
+                try stdout_w.print("  --- SIMD/FP instructions ({s}) ---\n", .{cpu_vendor.getName()});
+                try tty_conf.setColor(stdout_w, .reset);
+
+                for (m, 0..) |measurement, i| {
+                    const first_simd = if (command_n == 1) null else commands.items[0].simd_measurements;
+                    const first_measurement = if (first_simd) |fs| fs[i] else null;
+                    try printMeasurement(tty_conf, stdout_w, measurement, simd_events[i].name, first_measurement, commands.items.len);
+                }
+            }
+
             try stdout_w.flush(); // 💩
         }
     }
@@ -435,51 +572,60 @@ const Measurement = struct {
         count,
     };
 
-    fn compute(samples: []Sample, comptime field: []const u8, unit: Unit) Measurement {
-        std.mem.sort(Sample, samples, {}, Sample.lessThanContext(field).lessThan);
-        // Compute stats
-        var total: u64 = 0;
-        var min: u64 = std.math.maxInt(u64);
-        var max: u64 = 0;
-        for (samples) |s| {
-            const v = @field(s, field);
-            total += v;
-            if (v < min) min = v;
-            if (v > max) max = v;
+    fn compute(samples: []Sample, comptime field: []const u8, unit: Unit, buf: *[MAX_SAMPLES]u64) Measurement {
+        for (samples, 0..) |s, i| {
+            buf[i] = @field(s, field);
         }
-        const mean = @as(f64, @floatFromInt(total)) / @as(f64, @floatFromInt(samples.len));
+        return computeFromValues(buf[0..samples.len], unit);
+    }
+
+    fn computeSimd(samples: []Sample, simd_index: usize, buf: *[MAX_SAMPLES]u64) Measurement {
+        for (samples, 0..) |s, i| {
+            buf[i] = s.simd[simd_index];
+        }
+        return computeFromValues(buf[0..samples.len], .count);
+    }
+
+    fn computeFromValues(vals: []u64, unit: Unit) Measurement {
+        std.mem.sort(u64, vals, {}, std.sort.asc(u64));
+
+        var total: u64 = 0;
+        for (vals) |v| total += v;
+        const mean = @as(f64, @floatFromInt(total)) / @as(f64, @floatFromInt(vals.len));
+
         var std_dev: f64 = 0;
-        for (samples) |s| {
-            const v = @field(s, field);
+        for (vals) |v| {
             const delta: f64 = @as(f64, @floatFromInt(v)) - mean;
             std_dev += delta * delta;
         }
-        if (samples.len > 1) {
-            std_dev /= @floatFromInt(samples.len - 1);
+        if (vals.len > 1) {
+            std_dev /= @floatFromInt(vals.len - 1);
             std_dev = @sqrt(std_dev);
         }
 
-        const q1 = @field(samples[samples.len / 4], field);
-        const q3 = if (samples.len < 4) @field(samples[samples.len - 1], field) else @field(samples[samples.len - samples.len / 4], field);
+        const q1 = vals[vals.len / 4];
+        const q3 = if (vals.len < 4) vals[vals.len - 1] else vals[vals.len - vals.len / 4];
+
         // Tukey's Fences outliers
         var outlier_count: u64 = 0;
         const iqr: f64 = @floatFromInt(q3 - q1);
         const low_fence = @as(f64, @floatFromInt(q1)) - 1.5 * iqr;
         const high_fence = @as(f64, @floatFromInt(q3)) + 1.5 * iqr;
-        for (samples) |s| {
-            const v: f64 = @floatFromInt(@field(s, field));
-            if (v < low_fence or v > high_fence) outlier_count += 1;
+        for (vals) |v| {
+            const vf: f64 = @floatFromInt(v);
+            if (vf < low_fence or vf > high_fence) outlier_count += 1;
         }
+
         return .{
             .q1 = q1,
-            .median = @field(samples[samples.len / 2], field),
+            .median = vals[vals.len / 2],
             .q3 = q3,
             .mean = mean,
-            .min = min,
-            .max = max,
+            .min = vals[0],
+            .max = vals[vals.len - 1],
             .std_dev = std_dev,
             .outlier_count = outlier_count,
-            .sample_count = samples.len,
+            .sample_count = vals.len,
             .unit = unit,
         };
     }
