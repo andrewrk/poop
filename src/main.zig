@@ -36,6 +36,7 @@ const perf_measurements = [_]PerfMeasurement{
 
 const CpuVendor = enum {
     intel,
+    amd,
     unknown,
 
     fn detect() CpuVendor {
@@ -47,6 +48,9 @@ const CpuVendor = enum {
 
         if (std.mem.indexOf(u8, buf[0..n], "GenuineIntel")) |_| {
             return .intel;
+        }
+        if (std.mem.indexOf(u8, buf[0..n], "AuthenticAMD")) |_| {
+            return .amd;
         }
         return .unknown;
     }
@@ -62,6 +66,14 @@ const CpuVendor = enum {
                 .{ .name = "256b_packed_double", .event_type = .RAW, .config = 0x10C7 },
                 .{ .name = "256b_packed_single", .event_type = .RAW, .config = 0x20C7 },
             },
+            // AMD Zen4+ fp_ops_retired_by_width (0x08) and fp_ops_retired_by_type (0x0a)
+            .amd => &[_]PerfMeasurement{
+                .{ .name = "scalar_all", .event_type = .RAW, .config = 0x0F0A },
+                .{ .name = "pack_128", .event_type = .RAW, .config = 0x0808 },
+                .{ .name = "pack_256", .event_type = .RAW, .config = 0x1008 },
+                .{ .name = "pack_512", .event_type = .RAW, .config = 0x2008 },
+                .{ .name = "vector_all", .event_type = .RAW, .config = 0xF00A },
+            },
             .unknown => &.{},
         };
     }
@@ -69,6 +81,7 @@ const CpuVendor = enum {
     fn getName(self: CpuVendor) []const u8 {
         return switch (self) {
             .intel => "Intel",
+            .amd => "AMD",
             .unknown => "Unknown",
         };
     }
