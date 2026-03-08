@@ -16,6 +16,8 @@ const usage_text =
     \\ --color <when>         (default: auto) color output mode
     \\                            available options: 'auto', 'never', 'ansi'
     \\ -f, --allow-failures   (default: false) compare performance if a non-zero exit code is returned
+    \\ -e, --export <path>    export results to a ZON file
+    \\ -i, --import <path>    import previous results from a ZON file
     \\
 ;
 
@@ -88,10 +90,15 @@ pub fn main() !void {
     var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
     const stdout_w = &stdout_writer.interface;
 
-    var commands: std.ArrayList(Command) = .empty;
+    const CommandEntry = union(enum) {
+        run: Command,
+        import: []const u8,
+    };
+    var entries: std.ArrayList(CommandEntry) = .empty;
     var max_nano_seconds: u64 = std.time.ns_per_s * 5;
     var color: ColorMode = .auto;
     var allow_failures = false;
+    var export_path: ?[]const u8 = null;
 
     var arg_i: usize = 1;
     while (arg_i < args.len) : (arg_i += 1) {
@@ -99,12 +106,12 @@ pub fn main() !void {
         if (!std.mem.startsWith(u8, arg, "-")) {
             var cmd_argv: std.ArrayList([]const u8) = .empty;
             try parseCmd(arena, &cmd_argv, arg);
-            try commands.append(arena, .{
+            try entries.append(arena, .{ .run = .{
                 .raw_cmd = arg,
                 .argv = try cmd_argv.toOwnedSlice(arena),
                 .measurements = undefined,
                 .sample_count = undefined,
-            });
+            } });
         } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
             try stdout_w.writeAll(usage_text);
             try stdout_w.flush(); // 💩
@@ -143,9 +150,48 @@ pub fn main() !void {
             }
         } else if (std.mem.eql(u8, arg, "-f") or std.mem.eql(u8, arg, "--allow-failures")) {
             allow_failures = true;
+        } else if (std.mem.eql(u8, arg, "-e") or std.mem.eql(u8, arg, "--export")) {
+            arg_i += 1;
+            if (arg_i >= args.len) {
+                std.debug.print("'{s}' requires a file path.\n{s}", .{ arg, usage_text });
+                std.process.exit(1);
+            }
+            export_path = args[arg_i];
+        } else if (std.mem.eql(u8, arg, "-i") or std.mem.eql(u8, arg, "--import")) {
+            arg_i += 1;
+            if (arg_i >= args.len) {
+                std.debug.print("'{s}' requires a file path.\n{s}", .{ arg, usage_text });
+                std.process.exit(1);
+            }
+            try entries.append(arena, .{ .import = args[arg_i] });
         } else {
             std.debug.print("unrecognized argument: '{s}'\n{s}", .{ arg, usage_text });
             std.process.exit(1);
+        }
+    }
+
+    var commands: std.ArrayList(Command) = try .initCapacity(arena, entries.items.len);
+    var is_imported: std.ArrayList(bool) = try .initCapacity(arena, entries.items.len);
+    for (entries.items) |entry| {
+        switch (entry) {
+            .run => |cmd| {
+                try commands.append(arena, cmd);
+                try is_imported.append(arena, false);
+            },
+            .import => |path| {
+                const source = std.fs.cwd().readFileAllocOptions(arena, path, std.math.maxInt(u32), null, .of(u8), 0) catch |err| {
+                    std.debug.print("unable to read import file '{s}': {t}\n", .{ path, err });
+                    std.process.exit(1);
+                };
+                const import_cmds = std.zon.parse.fromSlice([]Command, arena, source, null, .{}) catch |err| {
+                    std.debug.print("unable to parse import results '{s}': {t}\n", .{ path, err });
+                    std.process.exit(1);
+                };
+                for (import_cmds) |cmd| {
+                    try commands.append(arena, cmd);
+                    try is_imported.append(arena, true);
+                }
+            },
         }
     }
 
@@ -171,7 +217,14 @@ pub fn main() !void {
 
     var timer = std.time.Timer.start() catch @panic("need timer to work");
 
-    for (commands.items, 1..) |*command, command_n| {
+    for (commands.items, 0..) |*command, command_idx| {
+        const command_n = command_idx + 1;
+
+        if (is_imported.items[command_idx]) {
+            try printCommand(tty_conf, stdout_w, command, command_n, commands.items);
+            continue;
+        }
+
         stderr_fba.reset();
 
         const max_prog_name_len = 50;
@@ -339,68 +392,88 @@ pub fn main() !void {
         };
         command.sample_count = all_samples.len;
 
-        {
-            try tty_conf.setColor(stdout_w, .bold);
-            try stdout_w.print("Benchmark {d}", .{command_n});
-            try tty_conf.setColor(stdout_w, .dim);
-            try stdout_w.print(" ({d} runs)", .{command.sample_count});
-            try tty_conf.setColor(stdout_w, .reset);
-            try stdout_w.writeAll(":");
-            for (command.argv) |arg| try stdout_w.print(" {s}", .{arg});
-            try stdout_w.writeAll("\n");
+        try printCommand(tty_conf, stdout_w, command, command_n, commands.items);
+    }
 
-            try tty_conf.setColor(stdout_w, .bold);
-            try stdout_w.writeAll("  measurement");
-            try stdout_w.splatByteAll(' ', 23 - "  measurement".len);
-            try tty_conf.setColor(stdout_w, .bright_green);
-            try stdout_w.writeAll("mean");
-            try tty_conf.setColor(stdout_w, .reset);
-            try tty_conf.setColor(stdout_w, .bold);
-            try stdout_w.writeAll(" ± ");
-            try tty_conf.setColor(stdout_w, .green);
-            try stdout_w.writeAll("σ");
-            try tty_conf.setColor(stdout_w, .reset);
-
-            try tty_conf.setColor(stdout_w, .bold);
-            try stdout_w.splatByteAll(' ', 12);
-            try tty_conf.setColor(stdout_w, .cyan);
-            try stdout_w.writeAll("min");
-            try tty_conf.setColor(stdout_w, .reset);
-            try tty_conf.setColor(stdout_w, .bold);
-            try stdout_w.writeAll(" … ");
-            try tty_conf.setColor(stdout_w, .magenta);
-            try stdout_w.writeAll("max");
-            try tty_conf.setColor(stdout_w, .reset);
-
-            try tty_conf.setColor(stdout_w, .bold);
-            try stdout_w.splatByteAll(' ', 20 - " outliers".len);
-            try tty_conf.setColor(stdout_w, .bright_yellow);
-            try stdout_w.writeAll("outliers");
-            try tty_conf.setColor(stdout_w, .reset);
-
-            if (commands.items.len >= 2) {
-                try tty_conf.setColor(stdout_w, .bold);
-                try stdout_w.splatByteAll(' ', 9);
-                try stdout_w.writeAll("delta");
-                try tty_conf.setColor(stdout_w, .reset);
-            }
-
-            try stdout_w.writeAll("\n");
-
-            inline for (@typeInfo(Command.Measurements).@"struct".fields) |field| {
-                const measurement = @field(command.measurements, field.name);
-                const first_measurement = if (command_n == 1)
-                    null
-                else
-                    @field(commands.items[0].measurements, field.name);
-                try printMeasurement(tty_conf, stdout_w, measurement, field.name, first_measurement, commands.items.len);
-            }
-
-            try stdout_w.flush(); // 💩
-        }
+    if (export_path) |path| {
+        var aw: std.Io.Writer.Allocating = .init(arena);
+        std.zon.stringify.serialize(commands.items, .{}, &aw.writer) catch |err| {
+            std.debug.print("unable to serialize results: {t}\n", .{err});
+            std.process.exit(1);
+        };
+        std.fs.cwd().writeFile(.{ .sub_path = path, .data = aw.written() }) catch |err| {
+            std.debug.print("unable to write export file '{s}': {t}\n", .{ path, err });
+            std.process.exit(1);
+        };
     }
 
     try stdout_w.flush(); // 💩
+}
+
+fn printCommand(
+    tty_conf: std.Io.tty.Config,
+    w: *std.Io.Writer,
+    command: *const Command,
+    command_n: usize,
+    commands: []const Command,
+) !void {
+    try tty_conf.setColor(w, .bold);
+    try w.print("Benchmark {d}", .{command_n});
+    try tty_conf.setColor(w, .dim);
+    try w.print(" ({d} runs)", .{command.sample_count});
+    try tty_conf.setColor(w, .reset);
+    try w.writeAll(":");
+    for (command.argv) |arg| try w.print(" {s}", .{arg});
+    try w.writeAll("\n");
+
+    try tty_conf.setColor(w, .bold);
+    try w.writeAll("  measurement");
+    try w.splatByteAll(' ', 23 - "  measurement".len);
+    try tty_conf.setColor(w, .bright_green);
+    try w.writeAll("mean");
+    try tty_conf.setColor(w, .reset);
+    try tty_conf.setColor(w, .bold);
+    try w.writeAll(" ± ");
+    try tty_conf.setColor(w, .green);
+    try w.writeAll("σ");
+    try tty_conf.setColor(w, .reset);
+
+    try tty_conf.setColor(w, .bold);
+    try w.splatByteAll(' ', 12);
+    try tty_conf.setColor(w, .cyan);
+    try w.writeAll("min");
+    try tty_conf.setColor(w, .reset);
+    try tty_conf.setColor(w, .bold);
+    try w.writeAll(" … ");
+    try tty_conf.setColor(w, .magenta);
+    try w.writeAll("max");
+    try tty_conf.setColor(w, .reset);
+
+    try tty_conf.setColor(w, .bold);
+    try w.splatByteAll(' ', 20 - " outliers".len);
+    try tty_conf.setColor(w, .bright_yellow);
+    try w.writeAll("outliers");
+    try tty_conf.setColor(w, .reset);
+
+    if (commands.len >= 2) {
+        try tty_conf.setColor(w, .bold);
+        try w.splatByteAll(' ', 9);
+        try w.writeAll("delta");
+        try tty_conf.setColor(w, .reset);
+    }
+
+    try w.writeAll("\n");
+
+    inline for (@typeInfo(Command.Measurements).@"struct".fields) |field| {
+        const measurement = @field(command.measurements, field.name);
+        const first_measurement = if (command_n == 1)
+            null
+        else
+            @field(commands[0].measurements, field.name);
+        try printMeasurement(tty_conf, w, measurement, field.name, first_measurement, commands.len);
+    }
+
+    try w.flush(); // 💩
 }
 
 fn parseCmd(arena: std.mem.Allocator, list: *std.ArrayList([]const u8), cmd: []const u8) !void {
