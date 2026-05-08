@@ -57,3 +57,38 @@ pub fn build(b: *std.Build) void {
         release.dependOn(&install.step);
     }
 }
+
+const builtin = @import("builtin");
+comptime { // check current Zig version is compatible
+    const min: std.SemanticVersion = .{ .major = 0, .minor = 15, .patch = 0, .pre = "dev" }; // .pre and .build default to null
+    const max: std.SemanticVersion = .{ .major = 0, .minor = 15, .patch = 0 };
+    const current = builtin.zig_version;
+    if (current.order(min) == .lt) {
+        const error_message =
+            \\Your version of zig is too old ({d}.{d}.{d}).
+            \\This project requires Zig minimum version {d}.{d}.{d}.
+        ;
+        @compileError(std.fmt.comptimePrint(error_message, .{
+            current.major,
+            current.minor,
+            current.patch,
+            min.major,
+            min.minor,
+            min.patch,
+        }));
+    }
+    if (current.order(max) == .gt) {
+        const error_message =
+            \\Your version of zig is too recent ({d}.{d}.{d}).
+            \\This project requires Zig maximum version to be {d}.{d}.{d}.
+        ;
+        @compileError(std.fmt.comptimePrint(error_message, .{
+            current.major,
+            current.minor,
+            current.patch,
+            max.major,
+            max.minor,
+            max.patch,
+        }));
+    }
+}
