@@ -17,7 +17,10 @@ Usage: poop [options] <command1> ... <commandN>
 Compares the performance of the provided commands.
 
 Options:
- --duration <ms>    (default: 5000) how long to repeatedly sample each command
+ -d, --duration <ms>    (default: 5000) how long to repeatedly sample each command
+ --color <when>         (default: auto) color output mode
+                            available options: 'auto', 'never', 'ansi'
+ -f, --allow-failures   (default: false) compare performance if a non-zero exit code is returned
 
 ```
 
