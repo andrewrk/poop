@@ -707,8 +707,8 @@ const t_table95_1to30 = [_]f64{
     2.06,
     2.056,
     2.052,
-    2.045,
     2.048,
+    2.045,
     2.042,
 };
 
@@ -726,3 +726,8 @@ const t_table95_10s_10to120 = [_]f64{
     1.982,
     1.98,
 };
+
+test "95 percent t critical values for 28 and 29 degrees of freedom" {
+    try std.testing.expectEqual(@as(f64, 2.048), getStatScore95(28));
+    try std.testing.expectEqual(@as(f64, 2.045), getStatScore95(29));
+}
