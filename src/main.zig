@@ -380,13 +380,13 @@ pub fn main(init: process.Init) !void {
 
             try stdout_w.writeAll("\n");
 
-            inline for (@typeInfo(Command.Measurements).@"struct".fields) |field| {
-                const measurement = @field(command.measurements, field.name);
+            inline for (@typeInfo(Command.Measurements).@"struct".field_names) |field| {
+                const measurement = @field(command.measurements, field);
                 const first_measurement = if (command_n == 1)
                     null
                 else
-                    @field(commands.items[0].measurements, field.name);
-                try printMeasurement(terminal, measurement, field.name, first_measurement, commands.items.len);
+                    @field(commands.items[0].measurements, field);
+                try printMeasurement(terminal, measurement, field, first_measurement, commands.items.len);
             }
 
             try stdout_w.flush(); // 💩
